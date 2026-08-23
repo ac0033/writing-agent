@@ -12,7 +12,13 @@ dependencies = [
     "pypdf>=6.16.1",
     "rank-bm25>=0.2.2",
     "requests>=2.32",
+    "mcp[cli]>=1.12,<2",
 ]
 
 [tool.uv]
 package = false
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
