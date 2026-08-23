@@ -1,0 +1,18 @@
+[project]
+name = "writing-agent"
+version = "0.1.0"
+description = "Agent workflow for technical article writing"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=0.2.60",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+    "openai>=1.50.0",
+    "tavily-python>=0.5.0",
+    "python-dotenv>=1.0.0",
+    "pypdf>=6.16.1",
+    "rank-bm25>=0.2.2",
+    "requests>=2.32",
+]
+
+[tool.uv]
+package = false
