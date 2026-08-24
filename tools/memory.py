@@ -22,6 +22,7 @@ import itertools
 import requests
 
 import config
+from log import log
 
 # 进程内复用同一个 MCP 会话（initialize 一次，后续调用带 Mcp-Session-Id）
 _session_id: str | None = None
@@ -131,10 +132,10 @@ def context_block(query: str | None = None, current_turn: int = 0) -> str:
     try:
         r = call_tool("memory_context", args)
     except Exception as e:
-        print(f"[memory] ⚠️ 记忆服务不可用，本次不注入记忆（{type(e).__name__}: {e}）")
+        log(f"[memory] ⚠️ 记忆服务不可用，本次不注入记忆（{type(e).__name__}: {e}）")
         return ""
     if r.get("status") == "blocked":
-        print(f"[memory] ⚠️ 复核队列积压 {r.get('pending_review_count', '?')} 条，"
+        log(f"[memory] ⚠️ 复核队列积压 {r.get('pending_review_count', '?')} 条，"
               "本次未注入记忆。请在 Kimi Code 会话中用 memory_review_list 处理。")
         return ""
     return r.get("block", "")
@@ -155,7 +156,7 @@ def wm_sync(goal: str, todos: list[dict], decisions: list[str] | None = None,
             "turn_watermark": turn,
         })
     except Exception as e:
-        print(f"[memory] ⚠️ 工作记忆同步失败（不影响流程）：{type(e).__name__}: {e}")
+        log(f"[memory] ⚠️ 工作记忆同步失败（不影响流程）：{type(e).__name__}: {e}")
 
 
 def session_end(session_id: str, conversation: list[dict]) -> dict | None:
@@ -169,5 +170,5 @@ def session_end(session_id: str, conversation: list[dict]) -> dict | None:
             "conversation_json": json.dumps(conversation, ensure_ascii=False),
         })
     except Exception as e:
-        print(f"[memory] ⚠️ 记忆收尾失败（不影响稿子保存）：{type(e).__name__}: {e}")
+        log(f"[memory] ⚠️ 记忆收尾失败（不影响稿子保存）：{type(e).__name__}: {e}")
         return None

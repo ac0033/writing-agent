@@ -24,7 +24,9 @@ sqlite 检查点里），重启瞬间正在跑的（running）任务降级为 in
 MEMORY_ENABLED=0 uv run python -m service.writing_server   # 关闭记忆副作用
 """
 import json
+import os
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +37,11 @@ import config
 from service import runner, snapshot
 
 TASKS_FILE = Path(__file__).parent / "tasks.json"
+HEARTBEAT_FILE = Path(__file__).parent / "heartbeat.json"
+
+# 节点内 LLM 调用的活性心跳落在这里（log.py 的 heartbeat() 读取该环境变量）；
+# import 时即设置，保证 runner 线程里的图执行也能看到。
+os.environ.setdefault("WRITING_HEARTBEAT_FILE", str(HEARTBEAT_FILE))
 
 _FINAL_ROUTES = ("approve", "content", "style")
 
@@ -123,6 +130,10 @@ class TaskManager:
             "status": task["status"],
             "progress": task.get("progress", []),
             "next_nodes": task.get("next_nodes", []),
+            # 节点级时间线：[{node, at, dur_s}]，实时反映跑到哪、每步多久
+            "timeline": task.get("timeline", []),
+            # 节点内 LLM 调用的活性心跳：判断"在生成"还是"卡死"的依据
+            "heartbeat": self._read_heartbeat(),
             "awaiting_human": awaiting,
             # 挂起时把 payload（大纲/成稿）带出来，供外部审阅后决定 resume 值
             "interrupt": task.get("interrupt") if awaiting else None,
@@ -131,6 +142,16 @@ class TaskManager:
             "created_at": task.get("created_at", ""),
             "updated_at": task.get("updated_at", ""),
         }
+
+    @staticmethod
+    def _read_heartbeat() -> dict | None:
+        """读心跳文件并补一个 age_s（距现在几秒）。读不到就返回 None。"""
+        try:
+            data = json.loads(HEARTBEAT_FILE.read_text(encoding="utf-8"))
+            data["age_s"] = round(time.time() - data.get("ts", 0), 1)
+            return data
+        except (OSError, json.JSONDecodeError):
+            return None
 
     def resume(self, task_id: str, decision: dict) -> str:
         task = self.tasks.get(task_id)
@@ -141,12 +162,13 @@ class TaskManager:
             self._validate_decision(task, decision)
             self._spawn(task_id, runner.resume_task, task, decision)
             return f"任务 {task_id} 已用传入的 decision 继续执行（后台）。"
-        if status == "interrupted":
-            # server 重启打断的任务：从上一个检查点继续，decision 无用武之地
+        if status in ("interrupted", "failed"):
+            # 检查点还在 sqlite 里：从上一个节点边界继续，已完成节点不重跑。
+            # failed 常见于 LLM 硬错误（余额/key/网络），修复后从这里续跑。
             self._spawn(task_id, runner.continue_task, task)
             return f"任务 {task_id} 已从上一个检查点继续执行（后台，decision 被忽略）。"
         raise ValueError(f"任务 {task_id} 当前状态为 {status}，不能 resume"
-                         "（只有 awaiting_human / interrupted 可以）。")
+                         "（只有 awaiting_human / interrupted / failed 可以）。")
 
     def result(self, task_id: str) -> dict:
         task = self.tasks.get(task_id)
@@ -219,8 +241,11 @@ def writing_start(topic: str, idea: str = "", auto_approve: bool = True) -> str:
 
 @mcp.tool()
 def writing_status(task_id: str) -> dict:
-    """查任务状态：已完成的节点、当前是否挂在人工确认点、挂起时的
-    interrupt payload（kind=outline 时是大纲，kind=final 时是待确认成稿）。"""
+    """查任务状态：节点时间线（timeline，每个节点完成时间+耗时）、当前是否挂在
+    人工确认点、挂起时的 interrupt payload（kind=outline 时是大纲，kind=final
+    时是待确认成稿）、LLM 调用的活性心跳（heartbeat：当前角色、已运行秒数、
+    已收思考/正文字数、距上次收到数据的秒数 last_data_ago_s、本条心跳的
+    年龄 age_s——age_s 持续很小说明正在正常生成）。"""
     return manager.status(task_id)
 
 
@@ -232,6 +257,8 @@ def writing_resume(task_id: str, decision: dict) -> str:
     {"approved": false, "feedback": "修改意见"} 打回重出大纲。
     终审确认点：{"route": "approve", "feedback": ""} 通过保存；
     route 为 "content" / "style" 分别回 writer 重写 / 回 stylist 重润色。
+    状态为 interrupted / failed 时调用则从上一个检查点继续（decision 被忽略），
+    已完成的节点不会重跑。
     """
     return manager.resume(task_id, decision)
 

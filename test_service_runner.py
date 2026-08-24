@@ -108,3 +108,19 @@ def test_on_saved_called_after_completion(env):
     runner.start_task(task2, persist, checkpoint_db=db, on_saved=boom)
     assert task2["status"] == "completed"  # 快照失败不拖垮成稿
     assert "git 不可用" in task2["snapshot_error"]
+
+
+def test_timeline_records_node_events(env):
+    """stream 驱动逐节点记 timeline：覆盖主链路节点，每条带时间戳和非负耗时。"""
+    db, persist, _ = env
+    task = _task("t-timeline", auto_approve=True)
+
+    runner.start_task(task, persist, checkpoint_db=db, on_saved=None)
+
+    assert task["status"] == "completed"
+    nodes = [e["node"] for e in task["timeline"]]
+    # 主链路的关键节点都应有事件（human_* 节点只 interrupt 不产 update，不在列）
+    for node in ("architect", "researcher", "writer", "reviewer", "stylist", "save"):
+        assert node in nodes
+    for e in task["timeline"]:
+        assert e["at"] and e["dur_s"] >= 0

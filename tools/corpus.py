@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 
 import config
+from log import log
 
 CHUNK_SIZE = 500      # 每块约 500 字
 CHUNK_OVERLAP = 80    # 块间重叠，避免切断上下文
@@ -93,11 +94,11 @@ def _get_index(name: str) -> dict:
                     for c in _chunk(text):
                         chunks.append({"source": path.name, "text": c, "links": links})
                 except Exception as e:
-                    print(f"[{label}] ⚠️ 解析失败：{path.name}：{e}")
+                    log(f"[{label}] ⚠️ 解析失败：{path.name}：{e}")
     tokens = [_bigrams(c["text"]) for c in chunks]
     idx = {"chunks": chunks, "bm25": BM25Okapi(tokens) if tokens else None, "tokens": tokens}
     _indexes[name] = idx
-    print(f"[{label}] 索引完成：{len(chunks)} 块，来自 {directory}")
+    log(f"[{label}] 索引完成：{len(chunks)} 块，来自 {directory}")
     return idx
 
 

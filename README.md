@@ -94,6 +94,7 @@ MOCK_LLM=1 uv run python main.py       # mock 模式，不消耗 API，测试流
 - 五个 agent 的 prompt 在 `prompts/`，想调整哪个 agent 的行为直接改对应文件。
 - agent5 的风格规范来自用户级 skill `~/.kimi-code/skills/human-writing/SKILL.md`（[human-writing](https://github.com/KKKKhazix/human-writing)），改风格标准去改那个文件。
 - 项目级 MCP：`.kimi-code/mcp.json` 配了 context7（langchain/langgraph 最新文档查询），新会话生效。
+- `WRITING_HEARTBEAT_FILE`（可选）：非空时 LLM 调用的实时活性（已运行秒数/已收字数/距上次数据秒数）每秒写入该 JSON 文件；service 层（`service/writing_server.py`）自动设为 `service/heartbeat.json` 并在 writing_status 里透出，CLI 用法不用管。所有进度类输出统一走 stderr（`log.py`），保证 stdio MCP 下 stdout 只承载 JSON-RPC 协议帧。
 
 ## 文件结构
 

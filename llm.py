@@ -34,6 +34,7 @@ from types import SimpleNamespace
 from openai import APIConnectionError, APIStatusError, OpenAI
 
 import config
+from log import heartbeat, log
 
 # 追加在每个 system prompt 末尾的输出契约
 CONTRACT = """
@@ -126,7 +127,17 @@ class _Progress:
 
     def _tick(self) -> None:
         while not self._stop.wait(1.0):
-            print("\r" + self._line() + " " * 8, end="", flush=True)
+            log("\r" + self._line() + " " * 8, end="", flush=True)
+            heartbeat(self._snapshot("running"))
+
+    def _snapshot(self, phase: str) -> dict:
+        """结构化活性快照：写心跳文件用，内容与状态行同源。"""
+        now = time.time()
+        return {"role": self.role, "model": self.model, "phase": phase,
+                "elapsed_s": int(now - self.start),
+                "thinking_chars": self.thinking, "content_chars": self.content,
+                "tool_calls": self.tool_calls,
+                "last_data_ago_s": int(now - self.last_data), "ts": now}
 
     def __enter__(self):
         self._thread.start()
@@ -135,7 +146,8 @@ class _Progress:
     def __exit__(self, *exc):
         self._stop.set()
         self._thread.join()
-        print()  # 状态行收尾换行，避免覆盖后续输出
+        log()  # 状态行收尾换行，避免覆盖后续输出
+        heartbeat(self._snapshot("finished"))
 
 
 class _StreamMessage:
@@ -216,7 +228,7 @@ def _create(role: str, provider: str, **kwargs):
         except Exception as e:
             if _retryable(e) and attempt < MAX_RETRIES:
                 delay = RETRY_DELAYS[attempt]
-                print(f"[{role}] {provider}/{model} 调用失败（{type(e).__name__}），"
+                log(f"[{role}] {provider}/{model} 调用失败（{type(e).__name__}），"
                       f"{delay}s 后重试（第 {attempt + 1}/{MAX_RETRIES} 次）")
                 time.sleep(delay)
                 continue
@@ -249,17 +261,17 @@ def _parse(role: str, model: str, raw: str) -> ChatResult:
     # 2. 有 <result> 开标签但没闭合：取其后全部内容
     m = re.search(r"<result>(.*)$", raw, re.S | re.I)
     if m and m.group(1).strip():
-        print(f"[{role}] ⚠️ <result> 块未闭合，已截取标签后内容")
+        log(f"[{role}] ⚠️ <result> 块未闭合，已截取标签后内容")
         return ChatResult(thinking, m.group(1).strip(), raw, model, True)
     # 3. 完全没有 result 块、但有 scratchpad：剥掉 scratchpad（含未闭合的），
     #    取剩余部分，避免思考内容原样流进下游
     rest = re.sub(r"<scratchpad>.*?(</scratchpad>|$)", "", raw, flags=re.S | re.I).strip()
     rest = re.sub(r"</?result>", "", rest).strip()
     if thinking and rest:
-        print(f"[{role}] ⚠️ 输出缺少 <result> 块，已剥掉 scratchpad 取剩余内容")
+        log(f"[{role}] ⚠️ 输出缺少 <result> 块，已剥掉 scratchpad 取剩余内容")
         return ChatResult(thinking, rest, raw, model, False)
     # 4. 啥标记都没有：回退为全文，保证流程不中断，但留下标记供排查
-    print(f"[{role}] ⚠️ 输出缺少 <result> 块，已回退为全文")
+    log(f"[{role}] ⚠️ 输出缺少 <result> 块，已回退为全文")
     return ChatResult(thinking, raw.strip(), raw, model, False)
 
 

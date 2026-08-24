@@ -125,3 +125,27 @@ def test_running_task_marked_interrupted_on_reload(tmp_path, monkeypatch):
                       on_saved=lambda task: None)
     assert mgr.status("t1")["status"] == "interrupted"
     assert mgr.status("t2")["status"] == "awaiting_human"  # 挂起的不动
+
+
+def test_failed_task_can_resume_from_checkpoint(mgr):
+    """failed 状态允许 resume：从上一个检查点继续，已完成节点不重跑。
+
+    用一个已完成的任务模拟：把状态改成 failed 再 resume，continue_task
+    从检查点续跑，图已在终点，直接回到 completed。"""
+    tid = mgr.start("失败续跑测试", auto_approve=True)
+    _wait(mgr, tid, lambda x: x["status"] == "completed")
+
+    mgr.tasks[tid]["status"] = "failed"
+    mgr.tasks[tid]["error"] = "模拟 LLM 硬错误"
+    msg = mgr.resume(tid, {})
+    assert "检查点" in msg
+    s = _wait(mgr, tid, lambda x: x["status"] == "completed")
+    assert s["status"] == "completed", s.get("error")
+
+
+def test_status_includes_timeline_and_heartbeat(mgr):
+    """status 返回节点时间线和心跳字段（无心跳文件时 heartbeat 为 None）。"""
+    tid = mgr.start("状态字段测试", auto_approve=True)
+    s = _wait(mgr, tid, lambda x: x["status"] == "completed")
+    assert any(e["node"] == "architect" for e in s["timeline"])
+    assert "heartbeat" in s  # 没设 WRITING_HEARTBEAT_FILE 时也是键存在、值为 None

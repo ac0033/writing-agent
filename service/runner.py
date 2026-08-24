@@ -22,6 +22,8 @@ memory 开关：config.MEMORY_ENABLED 在 import 时就读 MEMORY_ENABLED 环境
 核对一次环境变量做兜底——防止 config 先于环境变量设置就被 import 的时序问题。
 """
 import os
+import time
+from datetime import datetime
 
 from langgraph.types import Command
 
@@ -53,10 +55,37 @@ def _record_progress(task: dict, graph, cfg: dict) -> None:
         pass  # 进度只是观测信息，拿不到不影响主流程
 
 
+def _stream_graph(task: dict, graph, first_input, cfg: dict, persist) -> dict | None:
+    """跑图直到结束或 interrupt，逐节点事件记 timeline 并实时持久化。
+
+    用 stream（而不是 invoke）是为了拿到节点级事件：每个节点完成就往
+    task["timeline"] 追加一条 {node, at, dur_s} 并 persist，外部轮询
+    writing_status 能实时看到跑到哪了。dur_s 是距上一个节点事件的秒数，
+    依次拼起来就是各节点耗时。
+
+    返回 interrupt payload（挂在人工确认点）或 None（跑完）。
+    """
+    timeline = task.setdefault("timeline", [])
+    t0 = time.monotonic()
+    interrupt_payload = None
+    for chunk in graph.stream(first_input, cfg, stream_mode="updates"):
+        for node, update in chunk.items():
+            if node == "__interrupt__":
+                interrupt_payload = update[0].value
+                continue
+            now = time.monotonic()
+            timeline.append({"node": node,
+                             "at": datetime.now().isoformat(timespec="seconds"),
+                             "dur_s": round(now - t0, 1)})
+            t0 = now
+            persist(task)
+    return interrupt_payload
+
+
 def drive(task: dict, first_input, persist, checkpoint_db=None, on_saved=None) -> dict:
     """驱动图直到 完成 / 挂起等人 / 失败。直接修改并返回 task dict。
 
-    first_input 三种形态（对应 LangGraph 的三种 invoke 入口）：
+    first_input 三种形态（对应 LangGraph 的三种入口）：
     - dict（初始 state）：新任务从头跑；
     - Command(resume=...)：从挂起的 interrupt 续跑；
     - None：从上一个检查点继续（server 重启后恢复"interrupted"任务）。
@@ -74,9 +103,8 @@ def drive(task: dict, first_input, persist, checkpoint_db=None, on_saved=None) -
     try:
         with SqliteSaver.from_conn_string(db) as saver:
             graph = build_graph(checkpointer=saver)
-            result = graph.invoke(first_input, cfg)
-            while "__interrupt__" in result:
-                payload = result["__interrupt__"][0].value
+            payload = _stream_graph(task, graph, first_input, cfg, persist)
+            while payload is not None:
                 _record_progress(task, graph, cfg)
                 if task.get("auto_approve"):
                     resume_value = AUTO_RESUME[payload["kind"]]
@@ -85,8 +113,10 @@ def drive(task: dict, first_input, persist, checkpoint_db=None, on_saved=None) -
                     task["interrupt"] = payload  # 大纲/成稿内容，等外部确认
                     persist(task)
                     return task
-                result = graph.invoke(Command(resume=resume_value), cfg)
+                payload = _stream_graph(task, graph, Command(resume=resume_value),
+                                        cfg, persist)
             _record_progress(task, graph, cfg)
+            output_path = graph.get_state(cfg).values.get("output_path", "")
     except Exception as e:
         task["status"] = "failed"
         task["error"] = f"{type(e).__name__}: {e}"
@@ -95,7 +125,7 @@ def drive(task: dict, first_input, persist, checkpoint_db=None, on_saved=None) -
 
     task["status"] = "completed"
     task["interrupt"] = None
-    task["output_path"] = result.get("output_path", "")
+    task["output_path"] = output_path
     persist(task)
 
     # 成稿已落盘（save 节点完成）→ git 快照。快照失败不影响成稿本身。

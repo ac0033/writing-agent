@@ -27,6 +27,7 @@ from langgraph.types import interrupt
 
 import config
 import llm
+from log import log
 from state import WritingState
 from tools import memory
 from tools.search import search
@@ -57,7 +58,7 @@ def _run(role: str, node: str, system: str, user: str) -> tuple[str, dict]:
                       "<scratchpad> 和 <result> 两段标记。请基于相同输入重新完整输出。")
         if r2.parsed_ok:
             r = r2
-    print(f"[{node}] {r.model} 完成（思考 {len(r.thinking)} 字，产出 {len(r.result)} 字）")
+    log(f"[{node}] {r.model} 完成（思考 {len(r.thinking)} 字，产出 {len(r.result)} 字）")
     return r.result, {"node": node, "model": r.model, "thinking": r.thinking}
 
 
@@ -103,7 +104,7 @@ def _run_tool_loop(role: str, node: str, system: str, user: str,
                 executed[key] = text
                 desc = f"返回 {len(text)} 字"
             # 每次工具调用实时可见：模型是在稳步推进还是反复空转，一眼能看出来
-            print(f"  → {tc.function.name}({query[:60]})：{desc}", flush=True)
+            log(f"  → {tc.function.name}({query[:60]})：{desc}", flush=True)
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": text})
     if not content:
         # 轮数耗尽模型还想调工具：明确叫停，不带工具再要一次最终回答。
@@ -128,7 +129,7 @@ def _run_tool_loop(role: str, node: str, system: str, user: str,
                                   getattr(msg, "reasoning_content", None) or "")
         if r2.parsed_ok:
             r = r2
-    print(f"[{node}] {model} 完成（检索 {len(queries)} 次：{queries}；产出 {len(r.result)} 字）")
+    log(f"[{node}] {model} 完成（检索 {len(queries)} 次：{queries}；产出 {len(r.result)} 字）")
     log = {"node": node, "model": model,
            "thinking": r.thinking + (f"\n\n检索记录：{queries}" if queries else "")}
     return r.result, log
@@ -219,18 +220,18 @@ def _session_end_report(state: WritingState) -> None:
         return
     status = r.get("status")
     if status == "vetoed":
-        print("[memory] ⚠️ 记忆收尾被否决：工作记忆里还有未完成待办。"
+        log("[memory] ⚠️ 记忆收尾被否决：工作记忆里还有未完成待办。"
               "稿子已正常保存；待办可在 Kimi Code 会话中查看处理。")
     elif status == "archived_only":
-        print("[memory] 已归档对话原文（服务端未配置 LLM，跳过蒸馏）。")
+        log("[memory] 已归档对话原文（服务端未配置 LLM，跳过蒸馏）。")
     else:
-        print(f"[memory] 记忆收尾完成（{status}）。")
+        log(f"[memory] 记忆收尾完成（{status}）。")
     pending = r.get("pending_review") or []
     if pending:
-        print(f"[memory] 有 {len(pending)} 条内容待人工复核：")
+        log(f"[memory] 有 {len(pending)} 条内容待人工复核：")
         for i, item in enumerate(pending, 1):
-            print(f"  {i}. {str(item)[:120]}")
-        print("  裁决方式：在 Kimi Code 会话中调 memory_review_list / memory_review_resolve。")
+            log(f"  {i}. {str(item)[:120]}")
+        log("  裁决方式：在 Kimi Code 会话中调 memory_review_list / memory_review_resolve。")
 
 
 # ---------- 节点：agent1 定框架 ----------
