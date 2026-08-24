@@ -15,10 +15,10 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 # ---- 思考与输出预算 ----
 # thinking_budget：思考链最大 token 数（官方范围 1~32768）。写作任务实测思考
 #   经常冲到 3 万字，单次请求跑 8 分钟以上、被服务端断流的风险随之升高；
-#   压到 8192 保住质量收益，同时把生成时长砍回安全区间。
+#   压到 1 万左右保住质量收益，同时把生成时长砍回安全区间。
 # max_completion_tokens：思考链 + 正文的总输出上限。思考模式下旧的 max_tokens
 #   上限只有 32768 且只算正文，官方推荐改用本参数（无 32768 限制）。
-THINKING_BUDGET = 8192
+THINKING_BUDGET = 10240
 MAX_COMPLETION_TOKENS = 32768
 
 # ---- 客户端超时（秒）----
