@@ -16,10 +16,12 @@
 - 原生 thinking 默认关闭，仅对 config.THINKING_ROLES 中的质量敏感角色开启
   （A/B 实测开启后成稿质量明显提升）。原生思考只作为 scratchpad 之外的增强，
   解析仍然只认 content 里的契约标记，两者互不干扰。
-  注意：qwen 开思考后不要设过小的 max_tokens，否则会触发
-  max_tokens < thinking_budget 的 400（当前代码不设 max_tokens）。
+  思考链长度和总输出上限由 config 的 THINKING_BUDGET / MAX_COMPLETION_TOKENS
+  控制（思考模式下旧的 max_tokens 上限只有 32768 且不算思维链，故不用它）。
 
 错误处理（见 _create）：
+- 流式中途断流且已收到正文：不清零重赌，把已收到内容作为 assistant 前缀
+  让模型续写（续传上限 MAX_RESUMES 次，不占用重试额度）；
 - 瞬时错误（429 限流、5xx、网络/超时）：指数退避重试，多数能自愈；
 - 不可重试的错误（余额不足、key 无效等）：转成带排查指引的 RuntimeError。
   节点代码不捕获异常——失败后用相同 --thread-id 重跑即可从断点继续。
@@ -31,6 +33,7 @@ import time
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import httpx
 from openai import APIConnectionError, APIStatusError, OpenAI
 
 import config
@@ -72,12 +75,25 @@ def _get_client(provider: str) -> OpenAI:
         cfg = config.PROVIDERS[provider]
         if not cfg["api_key"]:
             raise RuntimeError(f"未找到 {provider} 的 API key，请在 {config.ENV_PATH} 中配置。")
-        _clients[provider] = OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"])
+        _clients[provider] = OpenAI(
+            api_key=cfg["api_key"], base_url=cfg["base_url"],
+            # read 超时是"两次收到数据之间的最长间隔"而非请求总时长
+            # （详见 config 同名常量注释），长生成不会被它误杀
+            timeout=httpx.Timeout(config.LLM_READ_TIMEOUT_S,
+                                  connect=config.LLM_CONNECT_TIMEOUT_S),
+        )
     return _clients[provider]
 
 
 MAX_RETRIES = 3          # 瞬时错误的重试次数（首发不算）
 RETRY_DELAYS = (2, 8, 20)  # 各次重试前的等待秒数
+MAX_RESUMES = 2          # 断流续传次数上限（不占用 MAX_RETRIES 额度）
+
+# 断流续写指令：模型在已收到的半截内容后直接续写，不重复、不加前言
+RESUME_PROMPT = (
+    "上面的回复因网络中断只输出了一半。请从中断处继续输出剩余内容，"
+    "不要重复已输出的部分，也不要加任何解释或开场白，直接续写。"
+)
 
 
 def _retryable(e: Exception) -> bool:
@@ -180,11 +196,16 @@ class _StreamMessage:
         return d
 
 
-def _collect_stream(role: str, model: str, stream):
+def _collect_stream(role: str, model: str, stream, sink: dict):
     """消费流式响应：拼接 content / reasoning_content / tool_calls 碎片，
-    同时驱动状态行，最后重组出与非流式调用同形状的响应对象。"""
-    content_parts, reasoning_parts = [], []
-    tool_calls: dict[int, dict] = {}
+    同时驱动状态行，最后重组出与非流式调用同形状的响应对象。
+
+    sink 由 _create 持有（{"content": [], "reasoning": [], "tool_calls": {}}），
+    碎片边收边往里写：流中途断掉时 _create 能从 sink 捞出已收到的内容做续传，
+    而不是让这上万字跟着异常一起丢掉。"""
+    content_parts = sink["content"]
+    reasoning_parts = sink["reasoning"]
+    tool_calls = sink["tool_calls"]
     with _Progress(role, model) as prog:
         for chunk in stream:
             if not chunk.choices:
@@ -217,33 +238,76 @@ def _create(role: str, provider: str, **kwargs):
     流式是为了可视性（见 _Progress）：非流式请求中途无任何信号，
     无法区分"正在生成"和"卡死"。流式碎片在 _collect_stream 里重组，
     对调用方暴露的形状与非流式一致。
+
+    断流续传：长文生成（思考 + 正文动辄数万字、单请求跑数分钟）中途被服务端
+    断流时，整体重试等于重新赌一次全程不出事，代价极高。所以只要断流前已收到
+    正文、且不是工具调用（半截工具参数无法安全续写），就把已收到内容作为
+    assistant 前缀追加到 messages，让模型接着写；续传最多 MAX_RESUMES 次，
+    耗尽后才回落为整体重试。
+
     所有 LLM 调用都走这里，节点代码不捕获异常：流程中断后检查点还在，
     修复问题（充值、改 key）用相同 --thread-id 重跑即可从失败节点继续。
     """
     model = kwargs.get("model", "?")
-    for attempt in range(MAX_RETRIES + 1):
+    base_messages = kwargs.get("messages") or []
+    resumed_content = ""    # 历次断流前已收到的正文，续写时拼回最终结果
+    resumed_reasoning = ""
+    resumes = 0
+    attempt = 0
+    while True:
+        sink = {"content": [], "reasoning": [], "tool_calls": {}}
         try:
             stream = _get_client(provider).chat.completions.create(stream=True, **kwargs)
-            return _collect_stream(role, model, stream)
+            resp = _collect_stream(role, model, stream, sink)
+            if resumed_content:  # 本次是续写：把断流前收到的部分拼回来
+                msg = resp.choices[0].message
+                msg.content = resumed_content + (msg.content or "")
+                msg.reasoning_content = resumed_reasoning + (msg.reasoning_content or "")
+            return resp
         except Exception as e:
-            if _retryable(e) and attempt < MAX_RETRIES:
+            if not _retryable(e):
+                raise _friendly_error(role, provider, model, e, retried=False) from e
+            got = "".join(sink["content"])
+            if got and not sink["tool_calls"] and resumes < MAX_RESUMES and base_messages:
+                # 断流续传：不消耗整体重试额度，也不等退避（连接刚断，无需冷却）
+                resumes += 1
+                resumed_content += got
+                resumed_reasoning += "".join(sink["reasoning"])
+                kwargs["messages"] = [*base_messages,
+                                      {"role": "assistant", "content": resumed_content},
+                                      {"role": "user", "content": RESUME_PROMPT}]
+                log(f"[{role}] {provider}/{model} 流中断（{type(e).__name__}），"
+                    f"已收到 {len(resumed_content)} 字，转为续写"
+                    f"（第 {resumes}/{MAX_RESUMES} 次）")
+                continue
+            if attempt < MAX_RETRIES:
+                # 续传耗尽，回落为整体重试：丢弃断流残留，回到最初的消息从头生成
+                # （否则半截内容会被拼进一次全新生成的结果里）
+                kwargs["messages"] = base_messages
+                resumed_content, resumed_reasoning, resumes = "", "", 0
                 delay = RETRY_DELAYS[attempt]
+                attempt += 1
                 log(f"[{role}] {provider}/{model} 调用失败（{type(e).__name__}），"
-                      f"{delay}s 后重试（第 {attempt + 1}/{MAX_RETRIES} 次）")
+                      f"{delay}s 后整体重试（第 {attempt}/{MAX_RETRIES} 次）")
                 time.sleep(delay)
                 continue
-            retried = f"（已重试 {MAX_RETRIES} 次）" if attempt == MAX_RETRIES and _retryable(e) else ""
-            raise RuntimeError(
-                f"[{role}] 调用 {provider}/{model} 失败{retried}：\n{e}\n\n"
-                "排查建议：\n"
-                "- 余额/配额不足（402，或错误信息含 insufficient / quota / 额度）："
-                "到对应平台充值或等额度刷新；\n"
-                "- API key 无效或没有权限（401/403）："
-                f"检查 {config.ENV_PATH} 里对应的 key；\n"
-                "- 持续 429/5xx：对方服务故障或限流，稍后再试。\n"
-                "修复后用本次会话的 --thread-id（启动时终端打印的会话 id）重新运行，"
-                "会从失败的节点继续，已完成的节点不会重跑、不会重复计费。"
-            ) from e
+            raise _friendly_error(role, provider, model, e, retried=True) from e
+
+
+def _friendly_error(role: str, provider: str, model: str, e: Exception,
+                    retried: bool) -> RuntimeError:
+    retried_note = f"（已重试 {MAX_RETRIES} 次）" if retried else ""
+    return RuntimeError(
+        f"[{role}] 调用 {provider}/{model} 失败{retried_note}：\n{e}\n\n"
+        "排查建议：\n"
+        "- 余额/配额不足（402，或错误信息含 insufficient / quota / 额度）："
+        "到对应平台充值或等额度刷新；\n"
+        "- API key 无效或没有权限（401/403）："
+        f"检查 {config.ENV_PATH} 里对应的 key；\n"
+        "- 持续 429/5xx：对方服务故障或限流，稍后再试。\n"
+        "修复后用本次会话的 --thread-id（启动时终端打印的会话 id）重新运行，"
+        "会从失败的节点继续，已完成的节点不会重跑、不会重复计费。"
+    )
 
 
 def _parse(role: str, model: str, raw: str) -> ChatResult:

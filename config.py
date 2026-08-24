@@ -12,6 +12,22 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
+# ---- 思考与输出预算 ----
+# thinking_budget：思考链最大 token 数（官方范围 1~32768）。写作任务实测思考
+#   经常冲到 3 万字，单次请求跑 8 分钟以上、被服务端断流的风险随之升高；
+#   压到 8192 保住质量收益，同时把生成时长砍回安全区间。
+# max_completion_tokens：思考链 + 正文的总输出上限。思考模式下旧的 max_tokens
+#   上限只有 32768 且只算正文，官方推荐改用本参数（无 32768 限制）。
+THINKING_BUDGET = 8192
+MAX_COMPLETION_TOKENS = 32768
+
+# ---- 客户端超时（秒）----
+# 注意 httpx 的 read timeout 是"两次收到数据之间的最长间隔"，不是请求总时长：
+# 流式生成只要持续来数据就不会触发，跑 10 分钟也没问题；真正卡住 5 分钟没数据
+# 才会断（_Progress 在 30 秒无数据时就已打警告）。connect 是建连超时。
+LLM_READ_TIMEOUT_S = 300
+LLM_CONNECT_TIMEOUT_S = 30
+
 # ---- provider 定义（均为 OpenAI 兼容接口）----
 # extra_body：默认关闭原生思考，思考走 prompt 层的 <scratchpad> 契约
 #   （跨 provider 一致、可解析、可入日志）。
@@ -43,9 +59,11 @@ PROVIDERS = {
         ],
         "api_key": DASHSCOPE_API_KEY,
         "extra_body": {"enable_thinking": False},
-        # 注意：开思考后不要再设过小的 max_tokens，否则会触发
-        # max_tokens < thinking_budget 的 400（当前代码不设 max_tokens，无此问题）
-        "extra_body_thinking": {"enable_thinking": True},
+        # max_completion_tokens 放在 extra_body 里是为了把 provider 专属参数集中在
+        # 这一处配置；extra_body 会原样并入请求体顶层，等价于 SDK 的同名参数
+        "extra_body_thinking": {"enable_thinking": True,
+                                "thinking_budget": THINKING_BUDGET,
+                                "max_completion_tokens": MAX_COMPLETION_TOKENS},
     },
 }
 
