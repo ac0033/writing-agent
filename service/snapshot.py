@@ -15,10 +15,16 @@ def git_snapshot(repo_path, message: str) -> str | None:
     """
 
     def git(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["git", *args], cwd=str(repo_path),
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-        )
+        try:
+            return subprocess.run(
+                ["git", *args], cwd=str(repo_path),
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                # stdin 给 DEVNULL：服务进程 stdin 是 MCP stdio 管道，git 在
+                # Windows 上遇到文件占用时会向 stdin 询问重试，继承管道会永久挂起。
+                stdin=subprocess.DEVNULL, timeout=120,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"git {' '.join(args)} 超时（120s）") from exc
 
     r = git("add", "-A")
     if r.returncode != 0:
