@@ -130,9 +130,9 @@ def _run_tool_loop(role: str, node: str, system: str, user: str,
         if r2.parsed_ok:
             r = r2
     log(f"[{node}] {model} 完成（检索 {len(queries)} 次：{queries}；产出 {len(r.result)} 字）")
-    log = {"node": node, "model": model,
-           "thinking": r.thinking + (f"\n\n检索记录：{queries}" if queries else "")}
-    return r.result, log
+    entry = {"node": node, "model": model,
+             "thinking": r.thinking + (f"\n\n检索记录：{queries}" if queries else "")}
+    return r.result, entry
 
 
 def _format_materials(materials: list[dict]) -> str:

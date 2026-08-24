@@ -124,3 +124,52 @@ def test_timeline_records_node_events(env):
         assert node in nodes
     for e in task["timeline"]:
         assert e["at"] and e["dur_s"] >= 0
+
+
+def test_tool_loop_log_name_collision_regression(monkeypatch):
+    """回归：_run_tool_loop 曾把日志函数 log() 与本地变量 log 撞名
+    （UnboundLocalError）。MOCK_LLM 模式不走工具循环，此测试直接覆盖该路径：
+    一轮工具调用 + 一轮正式回答。"""
+    from types import SimpleNamespace
+
+    import graph
+    import llm
+
+    class FakeMsg:
+        def __init__(self, content=None, tool_calls=None):
+            self.content = content
+            self.reasoning_content = ""
+            self.tool_calls = tool_calls
+
+        def model_dump(self, exclude_none=False):
+            d = {"role": "assistant", "content": self.content}
+            if self.tool_calls is not None:
+                d["tool_calls"] = [
+                    {"id": tc.id, "type": "function",
+                     "function": {"name": tc.function.name,
+                                  "arguments": tc.function.arguments}}
+                    for tc in self.tool_calls]
+            if exclude_none:
+                d = {k: v for k, v in d.items() if v is not None}
+            return d
+
+    tool_call = SimpleNamespace(
+        id="c1", type="function",
+        function=SimpleNamespace(name="search_wiki", arguments='{"query": "测试"}'))
+    responses = [
+        (FakeMsg(tool_calls=[tool_call]), "mock-model"),          # 第 1 轮：调工具
+        (FakeMsg("<scratchpad>思考</scratchpad><result>正式产出</result>"),
+         "mock-model"),                                            # 第 2 轮：给结果
+    ]
+
+    def fake_chat_with_tools(role, messages, tools):
+        return responses.pop(0)
+
+    monkeypatch.setattr(llm, "chat_with_tools", fake_chat_with_tools)
+    result, entry = graph._run_tool_loop(
+        "writer", "agent2", "sys", "user",
+        [{"name": "search_wiki"}], {"search_wiki": lambda query: "材料文本"})
+
+    assert result == "正式产出"
+    assert entry["node"] == "agent2"
+    assert "检索记录" in entry["thinking"]
