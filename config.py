@@ -106,7 +106,7 @@ CORPUS_DIR = BASE_DIR / "corpus"
 # llm_wiki 知识库的知识层（agent1/agent2 检索用；raw/ 是原始快照，不索引）
 WIKI_DIR = Path(r"***REMOVED***")
 # agent5 的风格规范：human-writing skill（安装于用户级 skills 目录）
-HUMAN_WRITING_SKILL_PATH = Path(r"***REMOVED***/.kimi-code/skills/human-writing/SKILL.md")
+HUMAN_WRITING_SKILL_PATH = Path(os.getenv("HUMAN_WRITING_SKILL_PATH", str(Path.home() / ".kimi-code/skills/human-writing/SKILL.md")))
 CHECKPOINT_DB = BASE_DIR / ".checkpoints.sqlite"
 # 会话登记表：thread_id → 主题/状态/产出路径（--list 查看，--thread-id 回访）
 SESSIONS_FILE = BASE_DIR / "sessions.json"
