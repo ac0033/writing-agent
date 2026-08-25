@@ -89,7 +89,7 @@ MOCK_LLM=1 uv run python main.py       # mock 模式，不消耗 API，测试流
 
 ## 配置
 
-- API key 从 `***REMOVED***` 读取：`DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`（千问，agent2/5 用）、`TAVILY_API_KEY`（agent3 搜索用）、`BLOG_REPO_PATH`（可选，--push 用）。千问端点按 key 前缀自动选择（Token Plan / 按量）；如果你买的是 Coding Plan，在 .env 里加 `DASHSCOPE_PLAN=coding`。
+- API key 从仓库外的 `.env` 读取（路径由环境变量 `WRITING_ENV_PATH` 指定，默认 `~/.env`）：`DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`（千问，agent2/5 用）、`TAVILY_API_KEY`（agent3 搜索用）、`BLOG_REPO_PATH`（可选，--push 用）。千问端点按 key 前缀自动选择（Token Plan / 按量）；如果你买的是 Coding Plan，在 .env 里加 `DASHSCOPE_PLAN=coding`。
 - 模型分配、温度、循环上限在 `config.py`（`ROLE_MODELS` 一处改全图生效）。
 - 五个 agent 的 prompt 在 `prompts/`，想调整哪个 agent 的行为直接改对应文件。
 - agent5 的风格规范来自用户级 skill `~/.kimi-code/skills/human-writing/SKILL.md`（[human-writing](https://github.com/KKKKhazix/human-writing)），改风格标准去改那个文件。

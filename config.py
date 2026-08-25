@@ -4,8 +4,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# .env 在仓库外（用户指定位置），显式加载
-ENV_PATH = Path(r"***REMOVED***")
+# .env 在仓库外，路径由环境变量指定（默认用户主目录下的 .env），显式加载
+ENV_PATH = Path(os.getenv("WRITING_ENV_PATH", str(Path.home() / ".env")))
 load_dotenv(ENV_PATH)
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
@@ -104,7 +104,7 @@ PROMPTS_DIR = BASE_DIR / "prompts"
 OUTPUT_DIR = BASE_DIR / "output"
 CORPUS_DIR = BASE_DIR / "corpus"
 # llm_wiki 知识库的知识层（agent1/agent2 检索用；raw/ 是原始快照，不索引）
-WIKI_DIR = Path(r"***REMOVED***")
+WIKI_DIR = Path(os.getenv("WIKI_DIR", str(Path.home() / "llm_wiki/wiki")))
 # agent5 的风格规范：human-writing skill（安装于用户级 skills 目录）
 HUMAN_WRITING_SKILL_PATH = Path(os.getenv("HUMAN_WRITING_SKILL_PATH", str(Path.home() / ".kimi-code/skills/human-writing/SKILL.md")))
 CHECKPOINT_DB = BASE_DIR / ".checkpoints.sqlite"

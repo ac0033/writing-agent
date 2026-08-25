@@ -44,7 +44,7 @@ uv run python -m service.writing_server  # 启动 MCP 服务（cwd 必须是仓�
 
 ## 环境与密钥
 
-- API key 从仓库外的 `***REMOVED***` 读取：`DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`、`TAVILY_API_KEY`，可选 `BLOG_REPO_PATH`（--push 用）。
+- API key 从仓库外的 `.env` 读取（路径由环境变量 `WRITING_ENV_PATH` 指定，默认 `~/.env`）：`DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`、`TAVILY_API_KEY`，可选 `BLOG_REPO_PATH`（--push 用）。
 - 千问端点按 key 前缀自动选择；Coding Plan 需在 .env 加 `DASHSCOPE_PLAN=coding`。
 - 记忆服务默认 `http://127.0.0.1:8765/mcp`，scope `repo:writing`；`MEMORY_ENABLED=0` 可整体关闭。
 - agent5 的风格规范来自用户级 skill `~/.kimi-code/skills/human-writing/SKILL.md`（不在本仓库内）。
