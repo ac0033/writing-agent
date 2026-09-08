@@ -33,6 +33,19 @@ def _wait(mgr: TaskManager, task_id: str, pred, timeout: float = 60) -> dict:
     raise AssertionError(f"超时：任务未满足条件，当前 {mgr.status(task_id)}")
 
 
+def _complete(mgr, tid):
+    state = _wait(mgr, tid, lambda x: x["status"] in ("completed", "awaiting_human"))
+    if state["status"] == "awaiting_human":
+        assert state["interrupt"]["kind"] == "final"
+        # 等后台驱动退出，测试模拟真实用户随后确认保存。
+        mgr._threads[tid].join(timeout=5)
+        if mgr.status(tid)["status"] == "awaiting_human":
+            mgr.resume(tid, {"route": "approve", "feedback": ""})
+        state = _wait(mgr, tid, lambda x: x["status"] == "completed")
+    mgr._threads[tid].join(timeout=5)
+    return state
+
+
 def test_full_flow_persist_and_reload(mgr):
     """自动模式：start 立即返回 task_id → 后台跑到 completed →
     result 给出成稿目录和 article.md → tasks.json 落盘且重启后（新建
@@ -40,7 +53,7 @@ def test_full_flow_persist_and_reload(mgr):
     tid = mgr.start("MCP 集成测试", idea="", auto_approve=True)
     assert isinstance(tid, str) and tid
 
-    s = _wait(mgr, tid, lambda x: x["status"] == "completed")
+    s = _complete(mgr, tid)
     assert s["status"] == "completed", s.get("error")
     assert s["thread_id"] == f"svc-{tid}"
     assert "agent5" in s["progress"]
@@ -81,7 +94,7 @@ def test_suspend_and_resume_via_manager(mgr):
     assert "润色稿（mock）" in s["interrupt"]["polished"]
 
     mgr.resume(tid, {"route": "approve", "feedback": ""})
-    s = _wait(mgr, tid, lambda x: x["status"] == "completed")
+    s = _complete(mgr, tid)
     assert s["status"] == "completed", s.get("error")
     assert "润色稿（mock）" in mgr.result(tid)["article"]
 
@@ -104,7 +117,7 @@ def test_resume_rejects_bad_state_and_bad_decision(mgr):
     _wait(mgr, tid, lambda x: x["status"] == "awaiting_human"
           and (x["interrupt"] or {}).get("kind") == "final")
     mgr.resume(tid, {"route": "approve", "feedback": ""})
-    _wait(mgr, tid, lambda x: x["status"] == "completed")
+    _complete(mgr, tid)
     with pytest.raises(ValueError, match="不能 resume"):
         mgr.resume(tid, {"route": "approve", "feedback": ""})
 
@@ -133,19 +146,19 @@ def test_failed_task_can_resume_from_checkpoint(mgr):
     用一个已完成的任务模拟：把状态改成 failed 再 resume，continue_task
     从检查点续跑，图已在终点，直接回到 completed。"""
     tid = mgr.start("失败续跑测试", auto_approve=True)
-    _wait(mgr, tid, lambda x: x["status"] == "completed")
+    _complete(mgr, tid)
 
     mgr.tasks[tid]["status"] = "failed"
     mgr.tasks[tid]["error"] = "模拟 LLM 硬错误"
     msg = mgr.resume(tid, {})
     assert "检查点" in msg
-    s = _wait(mgr, tid, lambda x: x["status"] == "completed")
+    s = _complete(mgr, tid)
     assert s["status"] == "completed", s.get("error")
 
 
 def test_status_includes_timeline_and_heartbeat(mgr):
     """status 返回节点时间线和心跳字段（无心跳文件时 heartbeat 为 None）。"""
     tid = mgr.start("状态字段测试", auto_approve=True)
-    s = _wait(mgr, tid, lambda x: x["status"] == "completed")
+    s = _complete(mgr, tid)
     assert any(e["node"] == "architect" for e in s["timeline"])
     assert "heartbeat" in s  # 没设 WRITING_HEARTBEAT_FILE 时也是键存在、值为 None

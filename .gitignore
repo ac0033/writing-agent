@@ -13,9 +13,13 @@ __pycache__/
 service/tasks.json
 service/heartbeat.json
 sessions.json
+service/.*.lock
+service/*.tmp
 
 # 过程留痕（LLM 思考记录，随文章公开的是 article.md）
 output/**/thinking.md
+output/**/evidence.json
+output/**/publication.json
 output/thinking_ab/
 
 # 素材库里的版权物（书籍 PDF 等，不分发）
@@ -31,3 +35,5 @@ corpus/*.pdf
 Thumbs.db
 .idea/
 .vscode/
+service/heartbeat-*.json
+service/heartbeat-*.json.tmp

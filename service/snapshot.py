@@ -5,9 +5,10 @@ commit，不写 repo 的 user 配置（不动用户的 git 身份设置）。
 没有任何变更时不提交、不报错，返回 None。
 """
 import subprocess
+from pathlib import Path
 
 
-def git_snapshot(repo_path, message: str) -> str | None:
+def git_snapshot(repo_path, message: str, paths=None) -> str | None:
     """add -A + commit。有变更返回 commit hash；无变更返回 None。
 
     commit 失败（比如 git 不可用）抛 RuntimeError，调用方决定是否容忍
@@ -26,15 +27,23 @@ def git_snapshot(repo_path, message: str) -> str | None:
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"git {' '.join(args)} 超时（120s）") from exc
 
-    r = git("add", "-A")
+    root = Path(repo_path).resolve()
+    selected = paths if paths is not None else list(root.glob("*.md"))
+    rels = [Path(p).resolve().relative_to(root).as_posix() for p in selected]
+    if not rels:
+        return None
+    r = git("add", "--", *rels)
     if r.returncode != 0:
         raise RuntimeError(f"git add 失败：{r.stderr.strip()[:300]}")
     # --quiet：有暂存变更退出码 1，无变更 0
-    if git("diff", "--cached", "--quiet").returncode == 0:
+    diff = git("diff", "--cached", "--quiet", "--", *rels)
+    if diff.returncode == 0:
         return None
+    if diff.returncode != 1:
+        raise RuntimeError("无法检查快照变更")
     r = git("-c", "user.name=writing-service",
             "-c", "user.email=writing-service@local",
-            "commit", "-m", message)
+            "commit", "--only", "-m", message, "--", *rels)
     if r.returncode != 0:
         raise RuntimeError(f"git commit 失败：{r.stderr.strip()[:300]}")
     return git("rev-parse", "HEAD").stdout.strip()

@@ -18,6 +18,8 @@ kimi-code wire.jsonl 格式，log_path 适配层不适用。
 """
 import json
 import itertools
+import threading
+import time
 
 import requests
 
@@ -27,6 +29,8 @@ from log import log
 # 进程内复用同一个 MCP 会话（initialize 一次，后续调用带 Mcp-Session-Id）
 _session_id: str | None = None
 _ids = itertools.count(1)
+_rpc_lock = threading.RLock()
+_retry_after = 0.0
 
 
 class MemoryClientError(Exception):
@@ -44,17 +48,19 @@ def _ensure_session() -> None:
               "params": {"protocolVersion": "2025-03-26", "capabilities": {},
                          "clientInfo": {"name": "writing-agent", "version": "0.1"}}},
         headers={"Accept": "application/json, text/event-stream"},
-        timeout=config.MEMORY_TIMEOUT,
+        timeout=config.MEMORY_CONTEXT_TIMEOUT,
     )
     r.raise_for_status()
     _session_id = r.headers.get("Mcp-Session-Id", "")
-    _parse_response(r)  # 确认 initialize 本身成功（不抛错即可）
+    if "error" in _parse_response(r):
+        _session_id = None
+        raise MemoryClientError("记忆服务初始化失败")
     requests.post(
         config.MEMORY_MCP_URL,
         json={"jsonrpc": "2.0", "method": "notifications/initialized"},
         headers={"Accept": "application/json, text/event-stream",
                  **({"Mcp-Session-Id": _session_id} if _session_id else {})},
-        timeout=config.MEMORY_TIMEOUT,
+        timeout=config.MEMORY_CONTEXT_TIMEOUT,
     ).raise_for_status()
 
 
@@ -74,23 +80,39 @@ def _post(payload: dict) -> dict:
     """发一个 JSON-RPC 请求并返回结果消息。会话失效（404/410）时重建一次。"""
     global _session_id
     _ensure_session()
+    timeout = config.MEMORY_TIMEOUT if payload.get("params", {}).get("name") == "memory_session_end" else config.MEMORY_CONTEXT_TIMEOUT
     headers = {"Accept": "application/json, text/event-stream"}
     if _session_id:
         headers["Mcp-Session-Id"] = _session_id
     r = requests.post(config.MEMORY_MCP_URL, json=payload, headers=headers,
-                      timeout=config.MEMORY_TIMEOUT)
+                      timeout=timeout)
     if r.status_code in (404, 410):  # 服务重启会话丢失：重建会话重试一次
         _session_id = None
         _ensure_session()
+        headers.pop("Mcp-Session-Id", None)
         if _session_id:
             headers["Mcp-Session-Id"] = _session_id
         r = requests.post(config.MEMORY_MCP_URL, json=payload, headers=headers,
-                          timeout=config.MEMORY_TIMEOUT)
+                          timeout=timeout)
     r.raise_for_status()
     return _parse_response(r)
 
 
 def call_tool(name: str, arguments: dict) -> dict:
+    global _retry_after
+    with _rpc_lock:
+        if time.monotonic() < _retry_after:
+            raise MemoryClientError("记忆服务暂不可用，冷却期内跳过重试")
+        try:
+            result = _call_tool(name, arguments)
+            _retry_after = 0
+            return result
+        except (requests.RequestException, MemoryClientError, ValueError):
+            _retry_after = time.monotonic() + config.MEMORY_RETRY_COOLDOWN
+            raise
+
+
+def _call_tool(name: str, arguments: dict) -> dict:
     """调一个 MCP tool，返回业务结果（result.content[0].text 解析出的 dict）。"""
     msg = _post({"jsonrpc": "2.0", "id": next(_ids), "method": "tools/call",
                  "params": {"name": name, "arguments": arguments}})
@@ -118,7 +140,7 @@ def available() -> bool:
         return False
 
 
-def context_block(query: str | None = None, current_turn: int = 0) -> str:
+def context_block(query: str | None = None, current_turn: int = 0, scope: str | None = None) -> str:
     """取 memory_context 组装块（常驻画像 + 工作记忆 + 按需召回）。
 
     复核门 blocked（复核队列积压）时不放行不注入，只打印提示——
@@ -126,7 +148,7 @@ def context_block(query: str | None = None, current_turn: int = 0) -> str:
     """
     if not config.MEMORY_ENABLED:
         return ""
-    args = {"scope": config.MEMORY_SCOPE, "current_turn": current_turn}
+    args = {"scope": scope or config.MEMORY_SCOPE, "current_turn": current_turn}
     if query:
         args["query"] = query
     try:
@@ -142,13 +164,13 @@ def context_block(query: str | None = None, current_turn: int = 0) -> str:
 
 
 def wm_sync(goal: str, todos: list[dict], decisions: list[str] | None = None,
-            notes: list[str] | None = None, turn: int = 0) -> None:
+            notes: list[str] | None = None, turn: int = 0, scope: str | None = None) -> None:
     """全量替换式同步工作记忆（memory_wm_write 是全量替换语义，不是合并）。"""
     if not config.MEMORY_ENABLED:
         return
     try:
         call_tool("memory_wm_write", {
-            "scope": config.MEMORY_SCOPE,
+            "scope": scope or config.MEMORY_SCOPE,
             "goal": goal,
             "decisions": decisions or [],
             "todos": todos,
@@ -159,13 +181,13 @@ def wm_sync(goal: str, todos: list[dict], decisions: list[str] | None = None,
         log(f"[memory] ⚠️ 工作记忆同步失败（不影响流程）：{type(e).__name__}: {e}")
 
 
-def session_end(session_id: str, conversation: list[dict]) -> dict | None:
+def session_end(session_id: str, conversation: list[dict], scope: str | None = None) -> dict | None:
     """会话收尾：归档 + 联合蒸馏 + 清理已完成待办。返回服务端结果供调用方透出。"""
     if not config.MEMORY_ENABLED:
         return None
     try:
         return call_tool("memory_session_end", {
-            "scope": config.MEMORY_SCOPE,
+            "scope": scope or config.MEMORY_SCOPE,
             "session_id": session_id,
             "conversation_json": json.dumps(conversation, ensure_ascii=False),
         })

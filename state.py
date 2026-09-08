@@ -8,11 +8,23 @@ from typing import Annotated, TypedDict
 from operator import add
 
 
+def merge_materials(previous: list[dict], incoming: list[dict]) -> list[dict]:
+    """同一来源补搜后替换旧证据，避免恢复会话继续引用过期片段。"""
+    records = {m.get("source_url", ""): m for m in previous}
+    for material in incoming:
+        records[material.get("source_url", "")] = material
+    return list(records.values())
+
+
 class Material(TypedDict):
     """一份资料：内容 + 来源。来源必须非空，这是 agent3 的硬要求。"""
     title: str
     content: str
     source_url: str
+    evidence_text: str
+    fetched_at: str
+    published: str
+    source_status: str
 
 
 class WritingState(TypedDict, total=False):
@@ -20,6 +32,17 @@ class WritingState(TypedDict, total=False):
     topic: str                # 文章主题
     user_idea: str            # 用户的思路/方向/想法
     thread_id: str            # 会话 id（main.py 生成；记忆服务 session_end 的 session_id）
+    topic_id: str
+    research_date: str
+    source_records: Annotated[list[dict], add]
+    research_gaps: list[str]
+    quality_issues: list[str]
+    publication_ready: bool
+    final_check_verdict: str
+    final_check_comments: str
+    claims: list[dict]
+    memory_result: dict
+    reading_queue_path: str
 
     # ---- agent1：定框架 ----
     outline: str              # 大纲 + 结构 + 写作思路
@@ -28,7 +51,7 @@ class WritingState(TypedDict, total=False):
     outline_approved: bool
 
     # ---- agent3：资料 ----
-    materials: Annotated[list[Material], add]  # 资料库，追加合并
+    materials: Annotated[list[Material], merge_materials]
     research_request: str     # agent2 发来的补充资料请求（空 = 按 brief 搜集）
     research_rounds: int      # 补充资料轮数
 

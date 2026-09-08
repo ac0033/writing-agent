@@ -37,7 +37,7 @@ import httpx
 from openai import APIConnectionError, APIStatusError, OpenAI
 
 import config
-from log import heartbeat, log
+from log import heartbeat, heartbeat_task, log
 
 # 追加在每个 system prompt 末尾的输出契约
 CONTRACT = """
@@ -117,6 +117,7 @@ class _Progress:
 
     def __init__(self, role: str, model: str):
         self.role, self.model = role, model
+        self.task_id = heartbeat_task.get()
         self.start = self.last_data = time.time()
         self.thinking = self.content = self.tool_calls = 0
         self._stop = threading.Event()
@@ -149,7 +150,7 @@ class _Progress:
     def _snapshot(self, phase: str) -> dict:
         """结构化活性快照：写心跳文件用，内容与状态行同源。"""
         now = time.time()
-        return {"role": self.role, "model": self.model, "phase": phase,
+        return {"task_id": self.task_id, "role": self.role, "model": self.model, "phase": phase,
                 "elapsed_s": int(now - self.start),
                 "thinking_chars": self.thinking, "content_chars": self.content,
                 "tool_calls": self.tool_calls,
@@ -321,12 +322,13 @@ def _parse(role: str, model: str, raw: str) -> ChatResult:
     # 1. 完整的 <result>...</result>
     m = re.search(r"<result>(.*?)</result>", raw, re.S | re.I)
     if m:
-        return ChatResult(thinking, m.group(1).strip(), raw, model, True)
+        valid = bool(re.search(r"<scratchpad>.*?</scratchpad>", raw, re.S | re.I))
+        return ChatResult(thinking, m.group(1).strip(), raw, model, valid)
     # 2. 有 <result> 开标签但没闭合：取其后全部内容
     m = re.search(r"<result>(.*)$", raw, re.S | re.I)
     if m and m.group(1).strip():
         log(f"[{role}] ⚠️ <result> 块未闭合，已截取标签后内容")
-        return ChatResult(thinking, m.group(1).strip(), raw, model, True)
+        return ChatResult(thinking, m.group(1).strip(), raw, model, False)
     # 3. 完全没有 result 块、但有 scratchpad：剥掉 scratchpad（含未闭合的），
     #    取剩余部分，避免思考内容原样流进下游
     rest = re.sub(r"<scratchpad>.*?(</scratchpad>|$)", "", raw, flags=re.S | re.I).strip()
@@ -340,7 +342,9 @@ def _parse(role: str, model: str, raw: str) -> ChatResult:
 
 
 def _mock_raw(system: str) -> str:
-    if "<!-- role: architect -->" in system:
+    if "<!-- role: final_check -->" in system:
+        body = '{"verdict":"pass","claims":[],"issues":[],"resolved_gaps":[]}'
+    elif "<!-- role: architect -->" in system:
         body = (
             "# 大纲（mock）\n\n一、背景\n二、核心论点\n三、总结\n\n"
             "<!-- RESEARCH_BRIEF\n1. 主题相关背景资料\nRESEARCH_BRIEF -->"

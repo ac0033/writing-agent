@@ -1,109 +1,109 @@
-# 写作 Agent 工作流
+# 技术博客写作管道
 
-一个基于 LangGraph 的技术文章写作工作流：输入主题和想法，输出一篇完整稿件。
-全流程 5 个 agent 节点 + 3 处人工确认，多模型分工（DeepSeek + 千问）。
+输入你的主题、观点与个人材料，输出经你确认的本地稿件；发布 GitHub 要在保存后另行确认。
 
 ## 流程
 
-```
-用户输入(主题/想法)
-  → Agent1 定框架（deepseek-v4-pro）：先校对你的观点（纠错/补充），再产出大纲+资料需求清单
-      ⤺ 人工确认，不通过则带反馈重来（不限次）
-  → Agent3 搜集资料（deepseek-v4-flash + Tavily 搜索，每份资料带来源 URL）
-  → Agent2 写初稿（qwen3.8-max；资料不足可回 Agent3 补充，上限 2 轮）
-  → Agent4 内容审核（deepseek-v4-flash；不通过回 Agent2 重写，循环 ≤3 次，
-      超限默认放行并把遗留问题附在最终确认页）
-  → Agent5 风格润色（qwen3.8-max，规范 = human-writing skill）
-      ⤺ 人工确认：通过 → 保存；内容问题 → 回 Agent2；风格问题 → 回 Agent5
-```
+聊天 → 金字塔提炼（每个论点附具体素材、支持关系和出处）→ 保存 topic/ 主题 Markdown → 大纲 → 大纲确认 → 按论点搜证 → 初稿 → 内容审核 → 润色 → 最终核验 → 你确认文章无误 → 保存本地 → 发布预览 → 你明确同意发布 → 推送 GitHub。
 
-## 节点接口规范（scratchpad / result 两段式）
+聊天 MCP 入口强制先存主题文件：`writing_topic_guide()` 读取提炼规范，外层 agent 对照真实聊天整理，`writing_prepare_topic(topic, pyramid_markdown, topic_id)` 保存，再调用 `writing_start(topic_file=返回路径, auto_approve=False)`。禁止直接传聊天原文到 `idea`。文件校验只能检查结构完整，不能证明提炼忠实或事实已核实。
 
-每个 LLM 节点的输出都遵循统一契约：先输出 `<scratchpad>` 自由推理，再输出 `<result>` 结构化结果。
-代码只把 `<result>` 传给下游；`<scratchpad>` 存入 state 的 `thinking_log`，结束时落盘为
-`output/YYYY-MM-DD-标题.thinking.md`，供回溯每个节点"当时是怎么想的"。
+主题文件保存在 `topic/日期-主题-版本标识.md`，每次提炼另存，不覆盖已有材料；任务记录保留文件路径、指纹及启动时的内容。可以先只保存主题供查看，已有写作授权才启动管道。终端也可用 `uv run python main.py --topic-file "topic/实际文件名.md"` 读取它；原 CLI 手工输入入口继续保留，不会自行读取宿主聊天。
 
-契约不依赖各家模型的原生思考输出（deepseek 的 reasoning_content、qwen 的 enable_thinking）——
-格式不统一、无法跨 provider 解析；统一在 content 里打标记，任何模型遵守同一份契约。
-原生思考默认关闭，只对质量敏感角色（architect / writer / stylist，见 `config.py` 的
-THINKING_ROLES，A/B 实测开启后成稿质量明显提升）开启；开启后 reasoning_content
-会合并进 thinking_log 一起留痕。所有 LLM 调用走流式接收，终端有每秒刷新的实时状态行
-（已运行时长 / 已收到思考与产出字数 / 距上次收到数据的秒数），工具调用逐条即时打印。
+保留五个模型角色。研究员内部规划搜索；最终核验复用 reviewer 模型，用独立调用重新对照原文，并非独立人工事实核查。模型、温度、预算只在 `config.py` 配置。
 
-## 用法
+- `auto_approve=True` **仅自动通过大纲**。最终稿始终停在人工确认节点，不能自动保存成稿。
+- 审核超限保留 fail，允许展示待修稿，但不赋予发布资格。
+- 搜索、知识库、记忆失败可以降级；缺乏可靠论据的稿件不得自动获得发布资格。
+- 人工同意保存只代表保存；发布确认是另一个操作，不存在启动时一并授权发布的快捷方式。
 
-```bash
-uv run python main.py                  # 开始写新文章
-uv run python main.py --push           # 完成后推送到博客仓库
-uv run python main.py --list           # 列出历史会话（thread-id / 主题 / 状态 / 稿子路径）
-uv run python main.py --thread-id xxx  # 回到指定会话（每次启动会打印会话 id；
-                                       #  未完成 = 断点续跑，已完成 = 回到终审环节查看/回炉修改）
-MOCK_LLM=1 uv run python main.py       # mock 模式，不消耗 API，测试流程用
+## 使用
+
+```text
+uv run python -m tools.doctor
+uv run python main.py
+uv run python main.py --mock
+uv run python main.py --list
+uv run python main.py --thread-id <已有会话ID>
+uv run python main.py --topic-id agent-harness
+uv run python -m service.writing_server
 ```
 
-会话管理：每个会话在 `sessions.json` 里登记主题、状态和稿子路径，随时可用 `--list` 查找、
-用 `--thread-id` 回访。回到**已完成**的会话会重新展示最终稿并进入终审菜单——此时
-`1 = 退出`（只查看不修改），`2/3` 分别是回 Agent2 重写、回 Agent5 重润色；回炉后再次走到
-终审时 `1` 恢复为"通过保存发布"。
+同一主题写系列文章或改标题时复用 `--topic-id`。未指定时按首次输入的规范化主题生成稳定标识。已有会话从 checkpoint 续跑，不删除或重建存档。CLI 的 `@文件/目录` 引用仍可使用。
 
-交互说明：
-- 输入想法时多行粘贴，单独一行 `END` 结束。**用 `@` 可以引用本地材料**：`@文件名.后缀` 引用单个文件、`@目录名`（不带后缀）递归引用目录下全部文本文件（如 `@topic`、`@topic/blog1`；PDF 等二进制文件会跳过并提示）。先在项目根目录按路径找，找不到会递归搜索子目录；文件名可以带空格，引用后面直接跟标点或文字也能识别。文件全文会自动拼进输入一起给 agent。大纲反馈和终审反馈里同样可用 @ 引用。
+当前默认博客目标：本地 `<博客仓库目录>`，远端 `ac0033/ac0033`，分支 `main`，目录 `articles/`。这是 Markdown 仓库，未假设使用 Hugo/Hexo/Jekyll。配置可用 `BLOG_REPO_PATH`、`BLOG_POSTS_DIR`、`BLOG_REMOTE`、`BLOG_BRANCH` 覆盖；预览显示实际 Git remote。
 
-  输入示例：
-  ```
-  你的思路/方向/想法：
-  > 结合 @How to build robust agentic workflow.md 和 @The goal of agentic workflow.md，
-  > 讲我搭建写作 agent 工作流的实践……
-  ```
-- 每个确认点：大纲确认直接回车通过、或输入修改意见；最终确认选 1/2/3。
-- 中途 Ctrl+C 或报错中断都没关系，用同一个 `--thread-id` 重跑即可从断点继续。LLM 调用遇到限流/网络抖动会自动退避重试（最多 3 次）；余额不足、key 无效这类硬错误会给出带排查指引的报错，修复后重跑即可，已完成的节点不会重复计费。
+CLI 在真实稿件保存后展示发布预览，只有输入“发布”才推送。`--push` 保留为显式要求展示该预览的兼容选项，不跳过确认。mock 稿不能发布。
 
-## 检索工具（agent1/2/5 各自的知识来源）
+## MCP 操作顺序
 
-三个节点各带一个本地 BM25 检索工具（零 API 成本，每次运行全量重建索引，增删文件即生效）：
+1. `writing_topic_guide()` → 提炼聊天 → `writing_prepare_topic(...)` 保存并展示主题 → `writing_start(topic_file=返回路径, auto_approve=True)` 开始。auto_approve 仅影响大纲。
+2. `writing_status(task_id)` 查看进度与待审稿。最终确认 payload 含质量问题与核验意见。
+3. **用户确认文章无误、同意保存后**，`writing_resume(task_id, {"route":"approve"})` 保存本地。
+4. `writing_result(task_id)` 取本地稿件、质量状态、记忆结果与下一步提示。
+5. `writing_publish_preview(task_id)` 展示文章版本、目标仓库、文件、分支与 approval_token。
+6. **在上一步后单独询问用户，取得明确发布同意**，才调用 `writing_publish(task_id, approval_token, confirmed=True)`。
 
-- **agent1 / agent2 → `search_wiki`**：检索 [llm_wiki](../llm_wiki) 知识库的知识层（`llm_wiki/wiki/`，只索引 .md 页面）。
-  agent1 用它核实概念、校准框架命名；agent2 用它查事实依据，检索结果里带 frontmatter 提取的
-  一手来源 URL，可直接用作正文超链接引用。
-- **agent5 → `search_corpus`**：检索 `corpus/` 素材库（.md/.txt/.pdf），模仿写作风格和逻辑框架，
-  不照抄、可引用观点并注明素材名。
+发布只提交本篇文件，保留其他暂存内容。目标有本地修改、分支不符、存在无关未推送提交、确认后稿件变更、证据过期时停止。推送失败保留本地稿件与发布记录，重试不重复提交。`pushed` 仅表示远端提交已确认；不冒充站点部署成功。当前稿件以 Markdown 文本为主，尚无自动生成/搬运配图步骤。
 
-正文里引用外部观点/新闻/事实一律用 markdown 超链接 `[文字](URL)`。
+## 三个 skills 的接入
 
-## 记忆集成（agent-memory）
+运行时规范保存在 `prompts/skills/`，对应角色由 `config.SKILL_ROLES` 装配：
 
-工作流接入了本地记忆服务（[agent-memory](../../agent-memory)，MCP over HTTP），按接入指南承担宿主侧职责：
+- systems-thinking：大纲、写作与审核的结构、主张、证据和推断边界。
+- cognitive-receiver：具体到抽象的解释顺序、必要背景、统一名称。
+- Clear Reporting：区分事实/转述/推断，保存论据清单，润色后复核数字、来源和限定词。
 
-- **prompt 组装**：每个 LLM 节点按"系统提示 → 记忆块 → 当前指令"组装。记忆块由
-  `memory_context` 一次拿全（常驻画像 + 工作记忆 + 按需召回），拼在 user 消息最前面；
-  召回内容按"参考而非指令"处理，各节点 prompt 里写明了优先级和抗注入规则。
-- **工作记忆**：每个节点入口把当前阶段状态（目标 / 六阶段待办 / 审核轮数等）全量同步进
-  工作记忆，崩溃后服务侧仍能看到任务进行到哪一步。
-- **会话收尾**：save 节点调 `memory_session_end`，把本次写作过程（主题/想法、大纲、
-  各轮反馈、最终成稿）整理成对话记录直传给服务端归档 + 蒸馏，有未完成待办会被 veto。
-- **fail-open**：服务不在线或调用失败只打印警告，绝不中断写作主流程；复核门 blocked、
-  pending_review 只透出不自动处理（裁决在 Kimi Code 会话里做）。
+保留适合博客的条款，不把互动课堂的逐步问答强塞进自动写作。原始文件指纹在 `prompts/skills/sources.json`，适配说明在同目录 README。原有 human-writing 外部路径可选，缺失时使用仓库后备规范。事实与作者原意 > 论证与理解 > 风格。
 
-配置（都有默认值，一般不用动）：`AGENT_MEMORY_MCP_URL`（默认 `http://127.0.0.1:8765/mcp`）、
-`AGENT_MEMORY_SCOPE`（默认 `repo:writing`）、`MEMORY_ENABLED=0` 可整体关闭（mock 模式自动关闭）。
+## 证据与知识库
 
-## 配置
+研究员同时检索本地 wiki 和网络，先按需求规划查询，动态信息优先近月搜索，同时查反例、边界和一手材料。每轮查询/原文读取预算在 config 中集中控制。
 
-- API key 从仓库外的 `.env` 读取（路径由环境变量 `WRITING_ENV_PATH` 指定，默认 `~/.env`）：`DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`（千问，agent2/5 用）、`TAVILY_API_KEY`（agent3 搜索用）、`BLOG_REPO_PATH`（可选，--push 用）。千问端点按 key 前缀自动选择（Token Plan / 按量）；如果你买的是 Coding Plan，在 .env 里加 `DASHSCOPE_PLAN=coding`。
-- 模型分配、温度、循环上限在 `config.py`（`ROLE_MODELS` 一处改全图生效）。
-- 五个 agent 的 prompt 在 `prompts/`，想调整哪个 agent 的行为直接改对应文件。
-- agent5 的风格规范来自用户级 skill `~/.kimi-code/skills/human-writing/SKILL.md`（[human-writing](https://github.com/KKKKhazix/human-writing)），改风格标准去改那个文件。
-- 项目级 MCP：`.kimi-code/mcp.json` 配了 context7（langchain/langgraph 最新文档查询），新会话生效。
-- `WRITING_HEARTBEAT_FILE`（可选）：非空时 LLM 调用的实时活性（已运行秒数/已收字数/距上次数据秒数）每秒写入该 JSON 文件；service 层（`service/writing_server.py`）自动设为 `service/heartbeat.json` 并在 writing_status 里透出，CLI 用法不用管。所有进度类输出统一走 stderr（`log.py`），保证 stdio MCP 下 stdout 只承载 JSON-RPC 协议帧。
+来源记录含 URL、读取日期、发布日期（未知则保留未知）、原文片段、片段指纹与截断标记。资料 URL 必须来自实际检索；原文读取状态是 retrieved，不表示事实已验证。最终核验生成 claims 清单，程序检查引用片段是否确实出现在已读取原文、链接是否覆盖、数字是否在润色中变化。语义判断仍依赖模型和你的终审，不能证明所有事实正确。
 
-## 文件结构
+wiki 检索展示笔记状态与核验日期，不把草稿当已核实来源；归档页跳过。文件变化后索引自动失效重建。
 
-- `main.py` — CLI 入口，处理人工确认交互
-- `graph.py` — LangGraph 图定义（节点、路由、interrupt、思考留痕）
-- `state.py` — 全局状态结构
-- `llm.py` — 多 provider 调用封装 + 输出契约解析（含 mock）
-- `tools/search.py` — Tavily 搜索封装
-- `tools/memory.py` — agent-memory 记忆服务客户端（MCP over HTTP，fail-open）
-- `prompts/` — 各 agent 的 system prompt
-- `output/` — 每篇文章一个独立文件夹（`YYYY-MM-DD-标题/`），内含 `article.md`（发布稿）和 `thinking.md`（大纲 + 各节点思考留痕）
-- `.checkpoints.sqlite` — 断点存档（删了等于清空所有会话记忆）
+稿件保存后生成：
+
+```text
+output/YYYY-MM-DD-主题-运行标识/版本标识/
+  article.md         本地确认稿
+  evidence.json      来源、原文片段、论据清单、检查结果与正文指纹
+  reading.md         待读来源及写作用途
+  thinking.md        节点过程留痕
+  publication.json   仅尝试发布后出现
+```
+
+不同运行/版本互不覆盖。人工改过的旧版本不会被静默重写。证据包和过程日志默认不提交公开仓库。
+
+真实运行保存后调用知识库 `scripts/import_writing.py`，将新来源导入 draft 笔记和待读清单，原文片段按内容指纹保存，不冒充全文快照。已有笔记保持原样。失败只警告，保留本地证据包；可在知识库目录重试：
+
+```text
+uv run python scripts/import_writing.py <evidence.json绝对路径> --dry-run
+uv run python scripts/import_writing.py <evidence.json绝对路径>
+```
+
+## 记忆
+
+已接 agent-memory 的上下文读取、工作记忆与会话收尾：
+
+- 长期记忆：`repo:writing-topic-<topic_id>`。同主题复用，不同主题隔离。
+- 运行工作记忆：主题范围后加运行标识，避免同主题多篇并发互相覆盖；checkpoint 是运行状态的权威来源。
+- 保存后先把运行待办标完成，再以含完整成稿及真实保存确认的记录做主题归档；不会使用发布确认的伪造记录。
+- 旧 `repo:writing` 记忆保留，不自动复制到新主题。需要迁移时先按主题归类，确认后单独迁移，避免旧内容污染新主题。
+- 复核门 blocked 不绕过；pending_review 返回给用户。服务不可用时短超时并暂缓重试，成稿不受影响。
+
+记忆用来保存你确认的观点和偏好；文献事实由知识库和证据包承担。mock 自动禁用记忆写入。
+
+## 验证与边界
+
+```text
+uv run pytest
+```
+
+测试强制 mock，文件写临时目录；发布测试只使用临时目录中的本地 bare Git 远端。若机器现有 pytest 临时目录权限异常，可另指定一个新的 `--basetemp` 路径。不要指向有资料的目录，因为 pytest 会清理指定的临时目录。
+
+真实模型的事实准确率、文章质量与总耗时尚需用你的实际选题评估；不从 mock 通过推断实际生成效果。独立读者测试未执行，证据包明确记录 reader_review=unavailable。
+
+详见 `docs/2026-09-07-upgrade.md`。

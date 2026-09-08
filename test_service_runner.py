@@ -29,13 +29,16 @@ def _task(thread_id: str, auto_approve: bool) -> dict:
             "auto_approve": auto_approve, "status": "pending", "interrupt": None}
 
 
-def test_auto_approve_runs_to_save(env):
-    """auto_approve=True：从头跑到 save，两个人工确认点自动通过。"""
+def test_auto_approve_requires_final_confirmation(env):
+    """auto_approve=True 只自动过大纲；文章仍须明确人工确认。"""
     db, persist, persisted = env
     task = _task("t-auto", auto_approve=True)
 
     runner.start_task(task, persist, checkpoint_db=db, on_saved=None)
 
+    if task["status"] == "awaiting_human":
+        assert task["interrupt"]["kind"] == "final"
+        runner.resume_task(task, {"route": "approve", "feedback": ""}, persist, checkpoint_db=db, on_saved=None)
     assert task["status"] == "completed"
     assert task["interrupt"] is None
     # 成稿真的落盘了，内容是 mock 润色稿
@@ -71,6 +74,9 @@ def test_manual_suspend_and_resume(env):
     # 终审通过 → 跑到 save 完成
     runner.resume_task(task, {"route": "approve", "feedback": ""},
                        persist, checkpoint_db=db, on_saved=None)
+    if task["status"] == "awaiting_human":
+        assert task["interrupt"]["kind"] == "final"
+        runner.resume_task(task, {"route": "approve", "feedback": ""}, persist, checkpoint_db=db, on_saved=None)
     assert task["status"] == "completed"
     assert Path(task["output_path"]).exists()
 
@@ -98,6 +104,10 @@ def test_on_saved_called_after_completion(env):
 
     runner.start_task(task, persist, checkpoint_db=db,
                       on_saved=lambda t: "fake-commit-hash")
+    runner.resume_task(task, {"route": "approve"}, persist, checkpoint_db=db, on_saved=lambda t: "fake-commit-hash")
+    if task["status"] == "awaiting_human":
+        assert task["interrupt"]["kind"] == "final"
+        runner.resume_task(task, {"route": "approve", "feedback": ""}, persist, checkpoint_db=db, on_saved=None)
     assert task["status"] == "completed"
     assert task["snapshot_commit"] == "fake-commit-hash"
 
@@ -106,6 +116,7 @@ def test_on_saved_called_after_completion(env):
 
     task2 = _task("t-snap-fail", auto_approve=True)
     runner.start_task(task2, persist, checkpoint_db=db, on_saved=boom)
+    runner.resume_task(task2, {"route": "approve"}, persist, checkpoint_db=db, on_saved=boom)
     assert task2["status"] == "completed"  # 快照失败不拖垮成稿
     assert "git 不可用" in task2["snapshot_error"]
 
@@ -117,6 +128,9 @@ def test_timeline_records_node_events(env):
 
     runner.start_task(task, persist, checkpoint_db=db, on_saved=None)
 
+    if task["status"] == "awaiting_human":
+        assert task["interrupt"]["kind"] == "final"
+        runner.resume_task(task, {"route": "approve", "feedback": ""}, persist, checkpoint_db=db, on_saved=None)
     assert task["status"] == "completed"
     nodes = [e["node"] for e in task["timeline"]]
     # 主链路的关键节点都应有事件（human_* 节点只 interrupt 不产 update，不在列）

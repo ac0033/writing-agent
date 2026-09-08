@@ -71,7 +71,8 @@ def expand_file_refs(text: str) -> str:
             print(f"⚠️ 跳过二进制文件（无法作为文本引用）：{p.name}")
             return None
         content = p.read_text(encoding="utf-8", errors="replace")
-        print(f"📎 已读取：{p.relative_to(config.BASE_DIR)}（{len(content)} 字）")
+        display = p.relative_to(config.BASE_DIR) if p.is_relative_to(config.BASE_DIR) else p
+        print(f"📎 已读取：{display}（{len(content)} 字）")
         return f"\n【引用文件：{p.name}】\n{content}\n【引用文件结束】\n"
 
     def repl(m: re.Match) -> str:
@@ -152,17 +153,19 @@ def handle_interrupt(payload: dict, review_mode: bool = False) -> dict | None:
         print_box("Agent5 润色后的最终稿", payload["polished"])
         if payload.get("forced_pass"):
             print_box(
-                "⚠️ 审核遗留问题（agent4 三次未通过被默认放行，请重点检查这些点）",
+                "⚠️ 审核超限，尚未通过，请重点检查这些点",
                 payload["review_comments"],
             )
+        if payload.get("quality_issues"):
+            print_box("发布前须解决的问题", "\n".join(payload["quality_issues"]))
         if review_mode:
-            print("该会话已发布过。请选择：")
+            print("该会话已保存过。请选择：")
             print("  1 = 退出（本轮只查看，不做修改）")
             print("  2 = 内容有问题，回 Agent2 重写")
             print("  3 = 风格/表述有问题，回 Agent5 重润色")
         else:
             print("请选择：")
-            print("  1 = 通过，保存发布")
+            print("  1 = 我已确认文章无误，保存本地（不发布）")
             print("  2 = 内容有问题，回 Agent2 重写")
             print("  3 = 风格/表述有问题，回 Agent5 重润色")
         choice = input("> ").strip()
@@ -175,30 +178,41 @@ def handle_interrupt(payload: dict, review_mode: bool = False) -> dict | None:
     raise ValueError(f"未知的 interrupt 类型：{payload}")
 
 
-def maybe_push(output_path: str) -> None:
-    if not config.BLOG_REPO_PATH:
-        print("[--push] 未配置 BLOG_REPO_PATH，跳过推送。可在 .env 或 config.py 中配置博客仓库路径。")
-        return
-    import shutil
-    import subprocess
-    # output_path 形如 output/2026-08-17-标题/article.md，推送时用文件夹名作为文件名
-    name = os.path.basename(os.path.dirname(output_path)) + ".md"
-    dst = os.path.join(config.BLOG_REPO_PATH, name)
-    shutil.copy(output_path, dst)
-    for args in (["git", "add", "."], ["git", "commit", "-m", f"post: {name}"],
-                 ["git", "push"]):
-        r = subprocess.run(args, cwd=config.BLOG_REPO_PATH, capture_output=True, text=True)
-        print(f"[git {' '.join(args[1:])}] {r.stdout.strip() or r.stderr.strip()}")
+def maybe_push(output_path: str) -> dict | None:
+    from tools.publishing import preview, publish
+    try:
+        plan = preview(output_path)
+        print_box("稿件已保存本地，以下是发布预览", "\n".join(f"{k}: {v}" for k, v in plan.items() if k != "approval_token"))
+        answer = input("是否将这个已保存版本发布到上述仓库？输入 发布 确认；回车保留本地：\n> ").strip()
+        if answer != "发布":
+            print("稿件保留本地，未发布。")
+            return None
+        result = publish(output_path, confirmed=True, approval_token=plan["approval_token"])
+        print("已推送 GitHub；站点部署结果需另行核实。")
+        return result
+    except (ValueError, OSError, RuntimeError) as exc:
+        print(f"发布未完成（本地稿件保留）：{exc}")
+        return None
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="写作 Agent 工作流")
     parser.add_argument("--mock", action="store_true", help="不发真实 API 请求，测试流程用")
-    parser.add_argument("--push", action="store_true", help="结束后推送到博客仓库")
+    parser.add_argument("--push", action="store_true", help="保存后展示发布预览，仍需单独确认")
+    parser.add_argument("--topic-id", default="", help="同一主题跨文章复用的稳定标识")
+    parser.add_argument("--topic-file", default="", help="使用 topic/ 内已保存的聊天金字塔主题文件新建文章")
     parser.add_argument("--thread-id", default=None,
                         help="会话 id；不填则新建。填已有 id：未完成=断点续跑，已完成=回到终审环节查看/修改")
     parser.add_argument("--list", action="store_true", help="列出历史会话（thread-id / 主题 / 状态 / 稿子路径）")
     args = parser.parse_args()
+    if args.topic_file and args.thread_id:
+        parser.error("--topic-file 用于新建；续跑旧会话只用 --thread-id，避免替换存档输入")
+    prepared = None
+    if args.topic_file:
+        from tools.topics import load
+        prepared = load(args.topic_file)
+        if args.topic_id and args.topic_id != prepared["topic_id"]:
+            parser.error("--topic-id 与主题文件不一致")
 
     if args.list:
         list_sessions()
@@ -211,7 +225,7 @@ def main() -> None:
     if config.MEMORY_ENABLED:
         from tools import memory
         if memory.available():
-            print(f"记忆服务已连接：{config.MEMORY_MCP_URL}（scope: {config.MEMORY_SCOPE}）")
+            print(f"记忆服务已连接：{config.MEMORY_MCP_URL}（记忆按主题隔离）")
         else:
             print(f"⚠️ 记忆服务未连接（{config.MEMORY_MCP_URL}），本次写作不注入记忆、"
                   "流程不受影响。启动方式见 agent-memory 仓库的 scripts/start_http_server.cmd")
@@ -221,19 +235,23 @@ def main() -> None:
 
     with SqliteSaver.from_conn_string(str(config.CHECKPOINT_DB)) as saver:
         graph = build_graph(checkpointer=saver)
-        cfg = {"configurable": {"thread_id": thread_id}}
+        cfg = {"configurable": {"thread_id": thread_id}, "recursion_limit": config.GRAPH_RECURSION_LIMIT}
 
         # 已有存档 = 续跑，不再收集输入
         if saver.get_tuple(cfg) is None:
             from datetime import datetime
-            topic = input("文章主题：\n> ").strip()
-            idea = expand_file_refs(read_multiline(
+            topic = prepared["topic"] if prepared else input("文章主题：\n> ").strip()
+            idea = prepared["idea"] if prepared else expand_file_refs(read_multiline(
                 "你的思路/方向/想法（用 @文件名.后缀 引用单个文件、@目录名 引用整个目录，内容会自动读取拼入）："
             ))
-            save_session(thread_id, topic=topic, status="进行中",
+            from tools.identity import topic_id
+            identity = prepared["topic_id"] if prepared else topic_id(topic, args.topic_id)
+            save_session(thread_id, topic=topic, topic_id=identity, status="进行中",
+                         topic_file=prepared["topic_file"] if prepared else "",
+                         topic_sha256=prepared["topic_sha256"] if prepared else "",
                          started_at=datetime.now().isoformat(timespec="seconds"))
             result = graph.invoke(
-                {"topic": topic, "user_idea": idea, "thread_id": thread_id,
+                {"topic": topic, "topic_id": identity, "user_idea": idea, "thread_id": thread_id,
                  "outline_feedback": [],
                  "materials": [], "review_cycles": 0, "research_rounds": 0,
                  "thinking_log": []},
@@ -246,7 +264,7 @@ def main() -> None:
                 # 已跑完的会话：把状态拨回 stylist 刚完成的时刻，重新进入终审环节。
                 # 这次终审按"查看模式"处理：1 = 退出不修改，2/3 = 回炉重写/重润色
                 print("该会话已跑完，重新进入终审环节（可查看稿子，也可选择回炉修改）。")
-                graph.update_state(cfg, {}, as_node="stylist")
+                graph.update_state(cfg, {}, as_node="final_check")
                 result = graph.invoke(None, cfg)
                 resume_value = handle_interrupt(result["__interrupt__"][0].value,
                                                 review_mode=True)
@@ -282,7 +300,7 @@ def main() -> None:
     print(f"\n完成！稿子已保存：{output_path}")
     if output_path:
         save_session(thread_id, status="已完成", output_path=output_path)
-    if args.push and output_path:
+    if output_path and (args.push or (config.BLOG_REPO_PATH and not config.MOCK_LLM)):
         maybe_push(output_path)
 
 

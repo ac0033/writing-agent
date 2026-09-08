@@ -11,6 +11,9 @@ import json
 import os
 import sys
 from pathlib import Path
+from contextvars import ContextVar
+
+heartbeat_task = ContextVar("heartbeat_task", default="")
 
 
 def log(*args, **kwargs) -> None:
@@ -26,6 +29,8 @@ def heartbeat(payload: dict) -> None:
         return
     try:
         p = Path(path)
+        if payload.get("task_id"):
+            p = p.with_name(p.stem + "-" + payload["task_id"] + p.suffix)
         tmp = p.with_suffix(p.suffix + ".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         tmp.replace(p)

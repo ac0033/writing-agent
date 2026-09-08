@@ -4,7 +4,7 @@
 两个人工确认节点的 interrupt：
 
 - auto_approve=True：outline 自动 resume {"approved": True, "feedback": ""}；
-  final 自动 resume {"route": "approve", "feedback": ""}，全程无人跑到 save。
+  final 始终挂起，用户明确确认无误后才能保存本地。
 - auto_approve=False：遇到 interrupt 就把 payload（大纲/待确认成稿）记进
   task["interrupt"] 并挂起（status="awaiting_human"），等外部调 resume_task
   传入 resume 值继续。
@@ -33,13 +33,13 @@ from graph import build_graph
 # resume 值的格式与 main.py handle_interrupt 保持一致（graph.py:266/445 的契约）
 AUTO_RESUME = {
     "outline": {"approved": True, "feedback": ""},
-    "final": {"route": "approve", "feedback": ""},
 }
 
 
-def initial_state(topic: str, idea: str, thread_id: str) -> dict:
+def initial_state(topic: str, idea: str, thread_id: str, topic_id: str = "") -> dict:
     """图的初始 state，字段照抄 main.py 的启动逻辑（main.py:235-241）。"""
-    return {"topic": topic, "user_idea": idea, "thread_id": thread_id,
+    from tools.identity import topic_id as resolve_topic_id
+    return {"topic": topic, "topic_id": resolve_topic_id(topic, topic_id), "user_idea": idea, "thread_id": thread_id,
             "outline_feedback": [], "materials": [], "review_cycles": 0,
             "research_rounds": 0, "thinking_log": []}
 
@@ -96,7 +96,7 @@ def drive(task: dict, first_input, persist, checkpoint_db=None, on_saved=None) -
 
     from langgraph.checkpoint.sqlite import SqliteSaver
     db = str(checkpoint_db or config.CHECKPOINT_DB)
-    cfg = {"configurable": {"thread_id": task["thread_id"]}}
+    cfg = {"configurable": {"thread_id": task["thread_id"]}, "recursion_limit": config.GRAPH_RECURSION_LIMIT}
 
     task["status"] = "running"
     persist(task)
@@ -106,7 +106,7 @@ def drive(task: dict, first_input, persist, checkpoint_db=None, on_saved=None) -
             payload = _stream_graph(task, graph, first_input, cfg, persist)
             while payload is not None:
                 _record_progress(task, graph, cfg)
-                if task.get("auto_approve"):
+                if task.get("auto_approve") and payload["kind"] == "outline":
                     resume_value = AUTO_RESUME[payload["kind"]]
                 else:
                     task["status"] = "awaiting_human"
@@ -116,7 +116,11 @@ def drive(task: dict, first_input, persist, checkpoint_db=None, on_saved=None) -
                 payload = _stream_graph(task, graph, Command(resume=resume_value),
                                         cfg, persist)
             _record_progress(task, graph, cfg)
-            output_path = graph.get_state(cfg).values.get("output_path", "")
+            values = graph.get_state(cfg).values
+            output_path = values.get("output_path", "")
+            task["publication_ready"] = values.get("publication_ready", False)
+            task["quality_issues"] = values.get("quality_issues", [])
+            task["memory_result"] = values.get("memory_result", {})
     except Exception as e:
         task["status"] = "failed"
         task["error"] = f"{type(e).__name__}: {e}"
@@ -142,7 +146,7 @@ def start_task(task: dict, persist, checkpoint_db=None, on_saved=None) -> dict:
     """新任务：用 task 里的 topic/idea/thread_id 组装初始 state 从头跑。"""
     return drive(task,
                  initial_state(task.get("topic", ""), task.get("idea", ""),
-                               task["thread_id"]),
+                               task["thread_id"], task.get("topic_id", "")),
                  persist, checkpoint_db, on_saved)
 
 

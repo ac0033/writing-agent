@@ -7,5 +7,12 @@
 """
 import os
 
-os.environ.setdefault("MOCK_LLM", "1")
-os.environ.setdefault("MEMORY_ENABLED", "0")
+os.environ["MOCK_LLM"] = "1"
+os.environ["MEMORY_ENABLED"] = "0"
+
+# 观测文件也不得污染正在运行的生产任务。
+import pytest
+
+@pytest.fixture(autouse=True)
+def isolated_heartbeat(tmp_path, monkeypatch):
+    monkeypatch.setenv("WRITING_HEARTBEAT_FILE", str(tmp_path / "heartbeat.json"))

@@ -1,0 +1,20 @@
+{
+  "adapted_at": "2026-09-07",
+  "sources": [
+    {
+      "name": "systems-thinking",
+      "source_path": "skills/systems-thinking/SKILL.md",
+      "sha256": "5001b26f468fddf6fb1c69a4b5d680c8e1787cfe82cbb72f11fc4bdc76a2d9c9"
+    },
+    {
+      "name": "cognitive-receiver",
+      "source_path": "skills/cognitive-receiver/SKILL.md",
+      "sha256": "7a4a69d0aac3f9fe48259a1c9b26cb260f5fbe659c953320ad09279037955375"
+    },
+    {
+      "name": "clear-reporting",
+      "source_path": "skills/clear-reporting/SKILL.md",
+      "sha256": "5062ecbdfffd68fc2d61b31a1dcdbbe08b1d03b0a7c97419995a906a205a9c3b"
+    }
+  ]
+}

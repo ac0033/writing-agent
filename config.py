@@ -91,20 +91,37 @@ TEMPERATURES = {
     "stylist": 0.5,
 }
 
-MAX_REVIEW_CYCLES = 3      # agent4 审核循环上限，超过则默认放行（附问题清单）
+MAX_REVIEW_CYCLES = 3      # 超限保留不通过状态，转人工检查，不自动发布
 MAX_RESEARCH_ROUNDS = 2    # agent2 向 agent3 请求补充资料的上限
 # 单个节点内检索工具调用的总预算（一轮并行发多个也累计）。
 # prompt 里的"检索控制在 5 次以内"只是软约束，模型未必遵守（实测跑过 8 次），
 # 预算是硬约束：超出后拒绝执行并要求模型基于已有信息收尾。
 MAX_TOOL_CALLS = 8
 SEARCH_RESULT_SNIPPET = 800  # 每条搜索结果截断长度，控制 researcher 上下文
+MAX_SEARCH_QUERIES = 8
+MAX_SOURCE_READS = 8
+SOURCE_TEXT_LIMIT = 16000
+MAX_TOOL_ROUNDS = 5
+GRAPH_RECURSION_LIMIT = 100
+SOURCE_FRESH_DAYS = 30
 
 BASE_DIR = Path(__file__).parent
 PROMPTS_DIR = BASE_DIR / "prompts"
 OUTPUT_DIR = BASE_DIR / "output"
+TOPIC_DIR = BASE_DIR / "topic"
+TOPIC_MAX_BYTES = 256_000
 CORPUS_DIR = BASE_DIR / "corpus"
 # llm_wiki 知识库的知识层（agent1/agent2 检索用；raw/ 是原始快照，不索引）
-WIKI_DIR = Path(os.getenv("WIKI_DIR", str(Path.home() / "llm_wiki/wiki")))
+WIKI_DIR = Path(os.getenv("WIKI_DIR", str(BASE_DIR.parent / "llm_wiki/wiki")))
+KB_ROOT = WIKI_DIR.parent
+SKILL_ROLES = {
+    "agent1_architect.md": ("systems-thinking",),
+    "agent2_writer.md": ("systems-thinking", "cognitive-receiver", "clear-reporting"),
+    "agent3_researcher.md": ("clear-reporting",),
+    "agent4_reviewer.md": ("systems-thinking", "clear-reporting", "cognitive-receiver"),
+    "agent5_stylist.md": ("cognitive-receiver", "clear-reporting", "human-writing"),
+    "agent6_final_check.md": ("systems-thinking", "clear-reporting", "cognitive-receiver"),
+}
 # agent5 的风格规范：human-writing skill（安装于用户级 skills 目录）
 HUMAN_WRITING_SKILL_PATH = Path(os.getenv("HUMAN_WRITING_SKILL_PATH", str(Path.home() / ".kimi-code/skills/human-writing/SKILL.md")))
 CHECKPOINT_DB = BASE_DIR / ".checkpoints.sqlite"
@@ -112,7 +129,10 @@ CHECKPOINT_DB = BASE_DIR / ".checkpoints.sqlite"
 SESSIONS_FILE = BASE_DIR / "sessions.json"
 
 # 博客仓库本地路径；留空则 --push 时只提示不执行
-BLOG_REPO_PATH = os.getenv("BLOG_REPO_PATH", "")
+BLOG_REPO_PATH = os.getenv("BLOG_REPO_PATH") or str(BASE_DIR.parents[1] / "ac0033")
+BLOG_POSTS_DIR = os.getenv("BLOG_POSTS_DIR", "articles")
+BLOG_REMOTE = os.getenv("BLOG_REMOTE", "origin")
+BLOG_BRANCH = os.getenv("BLOG_BRANCH", "main")
 
 MOCK_LLM = os.getenv("MOCK_LLM", "") == "1"
 
@@ -124,3 +144,5 @@ MEMORY_SCOPE = os.getenv("AGENT_MEMORY_SCOPE", "repo:writing")
 # mock 模式或显式关闭时不接记忆；服务不在线时运行时 fail-open（见 tools/memory.py）
 MEMORY_ENABLED = os.getenv("MEMORY_ENABLED", "1") == "1" and not MOCK_LLM
 MEMORY_TIMEOUT = 120  # 单次调用超时（秒）；session_end 的蒸馏走 LLM，给足余量
+MEMORY_CONTEXT_TIMEOUT = 5
+MEMORY_RETRY_COOLDOWN = 30

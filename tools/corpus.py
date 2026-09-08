@@ -57,11 +57,12 @@ def _chunk(text: str) -> list[str]:
 
 def _wiki_links(fm: str) -> list[str]:
     """从 wiki 页面 frontmatter 提取可引用的来源 URL（canonical_url / evidence_sources），去重。"""
-    links = re.findall(r"canonical_url:\s*(\S+)", fm)
-    ev = re.search(r"evidence_sources:\s*\n((?:\s+-\s+\S+\n?)+)", fm)
-    if ev:
-        links.extend(re.findall(r"-\s*(\S+)", ev.group(1)))
-    return list(dict.fromkeys(links))  # 保序去重
+    from tools.evidence import canonical_url
+    fields = re.findall(r"(?m)^(?:canonical_url|evidence_sources):[^\n]*(?:\n[ \t]+[^\n]*)*", fm)
+    return list(dict.fromkeys(u for field in fields
+                             for raw in re.findall(r"https?://[^\s\]\"',]+", field)
+                             if (u := canonical_url(raw))))
+
 
 
 def _strip_frontmatter(text: str) -> tuple[str, str]:
@@ -73,36 +74,47 @@ def _strip_frontmatter(text: str) -> tuple[str, str]:
 
 
 def _get_index(name: str) -> dict:
-    if name in _indexes:
-        return _indexes[name]
     from rank_bm25 import BM25Okapi
     if name == "corpus":
         directory, suffixes, label = config.CORPUS_DIR, (".md", ".txt", ".pdf"), "素材库"
     else:
         directory, suffixes, label = config.WIKI_DIR, (".md",), "知识库"
 
+    paths = sorted(p for p in directory.rglob("*") if p.is_file() and p.suffix.lower() in suffixes
+                   and p.name not in ("index.md", "log.md")) if directory.is_dir() else []
+    signature = tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in paths)
+    if name in _indexes and _indexes[name].get("signature") == signature:
+        return _indexes[name]
     chunks: list[dict] = []
     if directory.is_dir():
-        for path in sorted(directory.rglob("*")):
+        for path in paths:
             if path.is_file() and path.suffix.lower() in suffixes:
                 try:
                     text = _extract(path)
                     links = []
+                    status, verified = "", ""
                     if name == "wiki":
                         fm, text = _strip_frontmatter(text)
                         links = _wiki_links(fm)
+                        def field(key):
+                            match = re.search(r"(?m)^" + key + r":\s*([^\n]+)", fm)
+                            return match.group(1).strip().strip("\"'") if match else "unknown"
+                        status, verified = field("status"), field("last_verified")
+                        if status == "archived":
+                            continue
                     for c in _chunk(text):
-                        chunks.append({"source": path.name, "text": c, "links": links})
+                        chunks.append({"source": path.relative_to(directory).as_posix(), "text": c, "links": links, "status": status, "last_verified": verified})
                 except Exception as e:
                     log(f"[{label}] ⚠️ 解析失败：{path.name}：{e}")
     tokens = [_bigrams(c["text"]) for c in chunks]
-    idx = {"chunks": chunks, "bm25": BM25Okapi(tokens) if tokens else None, "tokens": tokens}
+    idx = {"chunks": chunks, "bm25": BM25Okapi(tokens) if tokens else None, "tokens": tokens, "signature": signature}
     _indexes[name] = idx
     log(f"[{label}] 索引完成：{len(chunks)} 块，来自 {directory}")
     return idx
 
 
 def _search(name: str, query: str, top_k: int, empty_msg: str) -> str:
+    top_k = max(1, min(8, int(top_k)))
     idx = _get_index(name)
     if not idx["bm25"]:
         return empty_msg
@@ -112,10 +124,14 @@ def _search(name: str, query: str, top_k: int, empty_msg: str) -> str:
         return "没有检索到相关内容。"
     blocks = []
     for i in top:
+        if scores[i] <= 0:
+            continue
         c = idx["chunks"][i]
         block = f"【出自：{c['source']}】（相关度 {scores[i]:.1f}）\n{c['text']}"
+        if name == "wiki":
+            block += f"\n笔记状态：{c['status']}；最近核验：{c['last_verified']}。笔记是线索，引用前需读取对应原文。"
         if c["links"]:
-            block += "\n可引用来源：" + "、".join(c["links"])
+            block += "\n待核对来源：" + "、".join(c["links"])
         blocks.append(block)
     return "\n\n---\n\n".join(blocks)
 
@@ -157,3 +173,20 @@ WIKI_TOOL_SCHEMA = _schema(
     "search_wiki",
     "检索 llm_wiki 知识库（AI Agent 主题的文献笔记，含概念解释、事实依据和一手来源链接）。query 用关键词短语，中英文均可；返回相关片段、出处页面和可引用来源 URL。",
 )
+
+
+def wiki_candidates(query: str, top_k: int = 3) -> list[dict]:
+    """研究员使用结构化笔记线索，最终证据仍须读取原文。"""
+    idx = _get_index("wiki")
+    if not idx["bm25"]:
+        return []
+    scores = idx["bm25"].get_scores(_bigrams(query))
+    result = []
+    for i in sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]:
+        if scores[i] <= 0:
+            continue
+        c = idx["chunks"][i]
+        for url in c["links"]:
+            result.append({"url": url, "title": c["source"], "content": c["text"],
+                           "wiki_status": c["status"], "query": query})
+    return result

@@ -15,7 +15,6 @@ import config
 import llm
 
 OUT = config.OUTPUT_DIR / "thinking_ab"
-OUT.mkdir(parents=True, exist_ok=True)
 
 # 各家开启原生思考的参数（关闭的参数在 config.PROVIDERS 里）
 THINK_ON = {
@@ -44,6 +43,8 @@ WRITER_USER = f"""文章大纲：
 
 
 def call(role: str, thinking_on: bool, system: str, user: str) -> dict:
+    if config.MOCK_LLM:
+        raise RuntimeError("mock 模式不运行真实 A/B 请求")
     provider, model = config.ROLE_MODELS[role]
     cfg = config.PROVIDERS[provider]
     client = OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"])
@@ -90,6 +91,7 @@ def run_role(role: str, prompt_file: str, user: str) -> None:
 
 
 if __name__ == "__main__":
+    OUT.mkdir(parents=True, exist_ok=True)
     run_role("architect", "agent1_architect.md", ARCHITECT_USER)
     run_role("writer", "agent2_writer.md", WRITER_USER)
     print(f"\n输出已保存到 {OUT}")
