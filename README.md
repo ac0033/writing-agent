@@ -17,6 +17,20 @@
 - 搜索、知识库、记忆失败可以降级；缺乏可靠论据的稿件不得自动获得发布资格。
 - 人工同意保存只代表保存；发布确认是另一个操作，不存在启动时一并授权发布的快捷方式。
 
+## 安装与配置
+
+需要 Python 3.11+ 和 uv。
+
+```bash
+git clone https://github.com/ac0033/writing-agent.git writing
+cd writing
+uv sync
+```
+
+真实运行从仓库外的环境文件读取 `DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY` 与 `TAVILY_API_KEY`。环境文件默认是用户主目录下的 `.env`，也可用 `WRITING_ENV_PATH` 指定。模型分工与端点选择见 [config.py](config.py)。先运行下方的 doctor 检查配置；mock 模式用于验证流程。
+
+知识库默认位于相邻的 `llm_wiki/wiki`，可用 `WIKI_DIR` 覆盖。博客目标应通过 `BLOG_REPO_PATH` 指向自己的本地 Git 仓库；目标分支、远程与文章目录分别由 `BLOG_BRANCH`、`BLOG_REMOTE`、`BLOG_POSTS_DIR` 配置。
+
 ## 使用
 
 ```text
@@ -31,7 +45,7 @@ uv run python -m service.writing_server
 
 同一主题写系列文章或改标题时复用 `--topic-id`。未指定时按首次输入的规范化主题生成稳定标识。已有会话从 checkpoint 续跑，不删除或重建存档。CLI 的 `@文件/目录` 引用仍可使用。
 
-当前默认博客目标：本地 `<博客仓库目录>`，远端 `ac0033/ac0033`，分支 `main`，目录 `articles/`。这是 Markdown 仓库，未假设使用 Hugo/Hexo/Jekyll。配置可用 `BLOG_REPO_PATH`、`BLOG_POSTS_DIR`、`BLOG_REMOTE`、`BLOG_BRANCH` 覆盖；预览显示实际 Git remote。
+当前代码的博客目录后备值由项目所在位置推导，并不保证该目录已存在或属于当前使用者。发布前应显式配置 `BLOG_REPO_PATH`，并检查发布预览中实际读取的 Git remote、分支和文件目标。
 
 CLI 在真实稿件保存后展示发布预览，只有输入“发布”才推送。`--push` 保留为显式要求展示该预览的兼容选项，不跳过确认。mock 稿不能发布。
 
@@ -106,4 +120,4 @@ uv run pytest
 
 真实模型的事实准确率、文章质量与总耗时尚需用你的实际选题评估；不从 mock 通过推断实际生成效果。独立读者测试未执行，证据包明确记录 reader_review=unavailable。
 
-详见 `docs/2026-09-07-upgrade.md`。
+完整操作步骤见 [使用指令指南](docs/使用指令指南.md)，实现与验证记录见 [改进记录](docs/2026-09-07-upgrade.md)。
