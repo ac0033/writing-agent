@@ -1,0 +1,36 @@
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.tmp/
+*.egg-info/
+
+# 本机运行时状态统一在 .runtime/（config.RUNTIME_DIR）：检查点 sqlite、会话登记、MCP 任务登记簿与心跳、
+# TUI 任务、原文缓存、Claude 额度文件、pytest 临时目录与缓存。删掉它等于清空全部会话记忆。
+.runtime/
+
+# 用户数据：主题材料与文章产物不入库
+topic/
+output/
+
+# 素材库（含版权 PDF 等）不入库
+corpus/
+
+# 开发者私人材料（方案、验收记录、一次性脚本）与编码助手的仓库本地配置，只忽略根目录
+/.notes/
+/.claude/
+/.kimi-code/
+
+# 兜底：任何密钥文件都不入库
+.env
+.env.*
+!.env.example
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+

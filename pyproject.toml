@@ -1,0 +1,33 @@
+[project]
+name = "writing-agent"
+version = "0.2.0"
+description = "Agent workflow for technical article writing"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=0.2.60",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+    "openai>=1.50.0",
+    "tavily-python>=0.5.0",
+    "python-dotenv>=1.0.0",
+    "pypdf>=6.16.1",
+    "rank-bm25>=0.2.2",
+    "requests>=2.32",
+    "mcp[cli]>=1.12,<2",
+    "textual>=0.89,<2",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+# 测试统一放在 tests/；模块仍在仓库根（config/graph/pipeline_v2 等），所以把根加入导入路径。
+# pytest 的临时目录与缓存固定进 .runtime/，不再在仓库根散落 .pytest-*、.pytest_cache。
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "--basetemp=.runtime/pytest"
+cache_dir = ".runtime/pytest_cache"

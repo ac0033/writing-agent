@@ -1,0 +1,125 @@
+"""LangGraph 全局状态定义。
+
+所有节点共享这一个 State。节点返回的 dict 会合并进 State；
+带 Annotated reducer 的字段（如 list 追加）按 reducer 规则合并，其余直接覆盖。
+"""
+from typing import Annotated, TypedDict
+
+from operator import add
+
+
+def merge_materials(previous: list[dict], incoming: list[dict]) -> list[dict]:
+    """同一来源补搜后替换旧证据，避免恢复会话继续引用过期片段。"""
+    records = {m.get("source_url", ""): m for m in previous}
+    for material in incoming:
+        records[material.get("source_url", "")] = material
+    return list(records.values())
+
+
+class Material(TypedDict):
+    """一份资料：内容 + 来源。来源必须非空，这是 agent3 的硬要求。"""
+    title: str
+    content: str
+    source_url: str
+    evidence_text: str
+    fetched_at: str
+    published: str
+    source_status: str
+
+
+class WritingState(TypedDict, total=False):
+    # ---- 用户输入 ----
+    topic: str                # 文章主题
+    user_idea: str            # 用户的思路/方向/想法
+    thread_id: str            # 会话 id（main.py 生成；记忆服务 session_end 的 session_id）
+    topic_id: str
+    research_date: str
+    source_records: Annotated[list[dict], add]
+    research_gaps: list[str]
+    quality_issues: list[str]
+    publication_ready: bool
+    final_check_verdict: str
+    final_check_comments: str
+    claims: list[dict]
+    memory_result: dict
+    reading_queue_path: str
+
+    # ---- agent1：定框架 ----
+    outline: str              # 大纲 + 结构 + 写作思路
+    research_brief: str       # agent1 给 agent3 的资料需求清单
+    outline_feedback: Annotated[list[str], add]  # 用户对大纲的历轮反馈
+    outline_approved: bool
+
+    # ---- agent3：资料 ----
+    materials: Annotated[list[Material], merge_materials]
+    research_request: str     # agent2 发来的补充资料请求（空 = 按 brief 搜集）
+    research_rounds: int      # 补充资料轮数
+
+    # ---- agent2：初稿 ----
+    draft: str
+    needs_research: bool      # 初稿节点是否发出了补充资料请求
+
+    # ---- agent4：审核 ----
+    review_verdict: str       # "pass" / "fail"
+    review_comments: str      # 审核意见（fail 时是重写依据；强制放行时随稿下传）
+    review_cycles: int
+    forced_pass: bool         # 达到循环上限被默认放行
+
+    # ---- agent5：润色 ----
+    polished: str
+
+    # ---- 过程留痕 ----
+    thinking_log: Annotated[list[dict], add]  # 每节点一条 {node, model, thinking}
+
+    # ---- 最终人工确认 ----
+    final_route: str          # "approve" / "content" / "style"
+    final_feedback: str
+    revision_feedback: str     # 内容退回意见跨补搜/审核循环保留，避免下一次写稿遗忘约束
+    final_article: str
+    output_path: str
+
+    # ---- v2：AI OS 与已确认摘要；旧会话仍可使用旧图 ----
+    pipeline_version: str
+    shared_summary: str
+    summary_confirmed: bool
+    summary_version: int
+    summary_feedback: str
+    article_version: int
+    reviewed_version: int
+    checked_version: int
+    final_approved_version: int
+    ai_os_steps: int
+    additional_steps: int
+    ai_os_next: str
+    task_instruction: str
+    human_question: str
+    pause_reason: str
+    research_completed: bool
+    failure_counts: dict
+    jev_request: dict
+    jev_result: dict
+    jev_external_authorization: dict
+    confirmed_preferences: list[dict]
+    approved_fingerprint: str
+    reviewed_fingerprint: str
+    checked_fingerprint: str
+    decision_log: Annotated[list[dict], add]
+    node_history: Annotated[list[dict], add]
+
+    execution_seconds: float
+    additional_seconds: int
+    additional_revisions: int
+    revision_pending: bool
+    review_dimensions: dict
+    issue_registry: dict
+    active_issue_ids: list[str]
+    review_dispute: dict
+    jev_conflicts: dict
+    jev_settings: dict
+    pending_explorations: list[str]
+    sample_requested: bool
+    sample_confirmed: bool
+    sample_options: dict
+    sample_feedback: str
+    sample_summary_version: int
+    style_references: list[dict]
