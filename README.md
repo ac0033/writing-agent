@@ -18,7 +18,7 @@
 
 启动后先进入“选择 AI OS 模型”页，分两步：先选接入方式，再从该方式的可选模型里选。页面会检测本机是否安装了 Codex 与 Claude Code，装了的显示版本并可直接用本机登录接入，没装的不可选；另外始终可以接 DeepSeek API、OpenAI 兼容 API 或 Anthropic 兼容 API（填地址与密钥后可读取模型列表）。手写的模型名会先核对再规范成标准写法。密钥输入遮蔽，只保留在当前进程。调用 Codex / Claude Code 前读取真实额度：Codex 至少剩余 15%，Claude 至少 10%，不可验证或不足则拒绝接入并提示。这里只选 AI OS 自己用的模型，各专业节点在顶栏“分工”里另设。
 
-本机运行时状态统一在 `.runtime/`（检查点、会话登记、MCP 任务登记簿、TUI 任务、额度文件、pytest 临时目录；可用 `WRITING_RUNTIME_DIR` 改位置）。TUI 任务默认在 `.runtime/tui/`；`--directory <目录>` 可接续验收脚本或 MCP 服务（`.runtime/service/`）创建的任务。专业节点分工可在页面顶栏“分工”里按任务修改，或用 `--role 角色=提供方[:模型]` 只对本次启动修改；每次调用前核验 CLI 额度，不足时按回退链切换并在页面显示实际接入（`WRITING_ROLE_FALLBACK=strict` 关闭回退）。`uv run python tui.py --mock`可无网络演练，模拟结果不算真实文章验收。可勾选“先确认短样稿”，在完整写作前选择A/B或提修改意见。页面操作详见[TUI使用说明](docs/TUI使用说明.md)。
+本机运行时状态统一在 `.runtime/`（检查点、会话登记、MCP 任务登记簿、TUI 任务、额度文件、pytest 临时目录；可用 `WRITING_RUNTIME_DIR` 改位置）。TUI 任务默认在 `.runtime/tui/`；`--directory <目录>` 可接续验收脚本或 MCP 服务（`.runtime/service/`）创建的任务。专业节点分工可在页面顶栏“分工”里按任务修改，或用 `--role 角色=提供方[:模型]` 只对本次启动修改；每次调用前核验 CLI 额度，不足时按回退链切换并在页面显示实际接入（`WRITING_ROLE_FALLBACK=strict` 关闭回退）。`uv run python tui.py --mock`可无网络演练，使用独立的 `.runtime/tui-mock` 与 `.runtime/mock/`，不会碰到真实任务和文章，模拟结果不算真实文章验收。已保存或已发布的版本可以写意见后点“退回修改”，基于这一版开修订任务，改好后接到该主题版本线的末尾。可勾选“先确认短样稿”，在完整写作前选择A/B或提修改意见。页面操作详见[TUI使用说明](docs/TUI使用说明.md)。
 
 Claude的额度数据接入、阈值与未知状态处理详见[AI OS额度接入说明](docs/AIOS_额度接入.md)。JEV保持关闭，偏好记录不等于允许向JEV外发或开放代决；维护与评估见[JEV验收计划](docs/jev验收计划.md)。
 
