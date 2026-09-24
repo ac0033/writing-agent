@@ -54,7 +54,7 @@ $env:WRITING_CLAUDE_QUOTA_FILE = '<仓库路径>/.runtime/claude-quota.json'
 
 ## 专业节点也按额度解析接入
 
-`ai_os_connection.resolve_role(role)` 在每次专业节点调用前解析实际接入：配置分工 → 任务级覆盖（`writing_configure_roles` / TUI“模型分工”，节点边界生效）→ 额度核验（同上门槛，结果 45 秒内复用）→ 回退链 `config.ROLE_FALLBACKS`（Codex↔Claude Code→DeepSeek API，API 模型 `config.ROLE_FALLBACK_API_MODEL`）。每次解析写日志 `[节点接入]`、回报页面并记入任务 `routes`。`WRITING_ROLE_FALLBACK=strict` 时只用配置/覆盖分工，不核验、不回退。切换不允许静默：由 AI OS 自行完成并在页面显示。
+`ai_os_connection.resolve_role(role)` 在每次专业节点调用前解析实际接入：配置分工 → 任务级覆盖（`writing_configure_roles` / TUI“分工”，节点边界生效）→ 额度核验（同上门槛，结果 45 秒内复用）→ 回退链 `config.ROLE_FALLBACKS`（Codex↔Claude Code→DeepSeek API，API 模型 `config.ROLE_FALLBACK_API_MODEL`）。每次解析写日志 `[节点接入]`、回报页面并记入任务 `routes`。`WRITING_ROLE_FALLBACK=strict` 时只用配置/覆盖分工，不核验、不回退。切换不允许静默：由 AI OS 自行完成并在页面显示。
 
 ## Claude Code 额度以 CLI 自报为准
 

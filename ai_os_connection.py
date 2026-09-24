@@ -39,9 +39,11 @@ class ConnectionSettings:
     api_key: str = field(default="", repr=False)
     base_url: str = ""
     model: str = ""
+    # 自动模式里 model 只给首选 Codex；回退到 Claude Code 时用这一项（留空为 CLI 默认模型）。
+    claude_model: str = ""
 
     def __post_init__(self):
-        if self.provider not in {"auto", "codex", "claude", "deepseek", "api"}:
+        if self.provider not in {"auto", "codex", "claude", "deepseek", "api", "anthropic"}:
             raise ConnectionError("不支持的 AI OS 接入方式")
         if self.base_url:
             url = urlsplit(self.base_url)
@@ -291,8 +293,8 @@ def parse_claude_quota(payload, *, now=None) -> QuotaStatus:
         return QuotaStatus("claude", None, now, "Claude Code 额度未知、格式无效或已过期")
 
 
-def probe_codex(*, timeout=15, environment=None) -> QuotaStatus:
-    """只初始化并查询额度，不读材料，不发生成请求；错误输出不进入日志。"""
+def _codex_request(method, params=None, *, timeout=15, environment=None):
+    """起一次 Codex app-server，初始化后发一个只读请求并返回 result；不创建线程、不发生成请求。"""
     from config import CLI_ENV
     proc = None
     try:
@@ -338,10 +340,9 @@ def probe_codex(*, timeout=15, environment=None) -> QuotaStatus:
             "clientInfo": {"name": "writing_ai_os_quota", "version": "1.0"}}})
         receive(1)
         send({"method": "initialized", "params": {}})
-        send({"id": 2, "method": "account/rateLimits/read"})
-        return parse_codex_quota(receive(2))
-    except (OSError, ValueError, TypeError, AgentError, TimeoutError, queue.Empty):
-        return QuotaStatus("codex", None, time.time(), "无法读取 Codex 实时额度；禁止接入")
+        # 部分方法（如 model/list）要求带 params，即使为空。
+        send({"id": 2, "method": method, **({"params": params} if params is not None else {})})
+        return receive(2)
     finally:
         if proc is not None:
             proc.terminate()
@@ -353,6 +354,29 @@ def probe_codex(*, timeout=15, environment=None) -> QuotaStatus:
             for stream in (proc.stdin, proc.stdout):
                 if stream:
                     stream.close()
+
+
+def probe_codex(*, timeout=15, environment=None) -> QuotaStatus:
+    """只初始化并查询额度，不读材料，不发生成请求；错误输出不进入日志。"""
+    try:
+        return parse_codex_quota(_codex_request("account/rateLimits/read", timeout=timeout, environment=environment))
+    except (OSError, ValueError, TypeError, AgentError, TimeoutError, queue.Empty):
+        return QuotaStatus("codex", None, time.time(), "无法读取 Codex 实时额度；禁止接入")
+
+
+def list_codex_models(*, timeout=15) -> list[tuple[str, str, bool]]:
+    """当前账户可用的 Codex 模型 [(标识, 显示名, 是否默认)]；读不到返回空列表（多半是未登录）。"""
+    try:
+        result = _codex_request("model/list", {}, timeout=timeout)
+    except (OSError, ValueError, TypeError, AgentError, TimeoutError, queue.Empty):
+        return []
+    models = []
+    for item in (result or {}).get("data") or []:
+        if isinstance(item, dict) and not item.get("hidden"):
+            identity = str(item.get("model") or item.get("id") or "")
+            if identity:
+                models.append((identity, str(item.get("displayName") or identity), bool(item.get("isDefault"))))
+    return models
 
 
 def _read_claude_quota(location) -> QuotaStatus:
@@ -480,13 +504,14 @@ class ConnectionManager:
                 quota = QuotaStatus(provider, None, time.time(), f"{display_name(provider)} 额度读取失败")
             if isinstance(quota, QuotaStatus) and quota.provider == provider and quota.permits():
                 # auto 下填写的模型只应用于首选 Codex，不能把其名称传给 Claude。
-                model = settings.model if preferred == provider or provider == "codex" else ""
+                model = (settings.model if preferred == provider or provider == "codex"
+                         else settings.claude_model)
                 return ConnectionSelection(provider, model, reason="；".join(reasons + [quota.reason]))
             reasons.append(quota.reason if isinstance(quota, QuotaStatus) else f"{display_name(provider)} 额度未知")
             if preferred != "auto":
                 threshold = 15 if provider == "codex" else 10
                 raise ConnectionError(f"禁止接入 {display_name(provider)}：剩余额度须至少 {threshold}% 且可实时验证；" + "；".join(reasons))
-        provider = "api" if preferred == "api" else "deepseek"
+        provider = preferred if preferred in {"api", "anthropic"} else "deepseek"
         defaults = config.PROVIDERS["deepseek"] if provider == "deepseek" else {}
         api_key = settings.api_key or defaults.get("api_key", "")
         base_url = settings.base_url or defaults.get("base_url", "")
@@ -496,7 +521,7 @@ class ConnectionManager:
             raise ConnectionError("；".join(reasons + ["API 接入需要 API key、地址和模型；密钥仅保留于当前进程"]))
         ConnectionSettings(provider=provider, base_url=base_url)
         return ConnectionSelection(provider, model, base_url, api_key,
-            "；".join(reasons + ["接入 DeepSeek API" if provider == "deepseek" else "接入指定 API"]))
+            "；".join(reasons + [f"接入 {display_name(provider)}"]))
 
 
 def describe_selection(selected: ConnectionSelection) -> str:
@@ -508,9 +533,16 @@ def describe_selection(selected: ConnectionSelection) -> str:
 def describe_settings(settings: ConnectionSettings | None = None) -> str:
     """尚未解析时只能说明选择顺序，不能预先声称已接入某一家。"""
     settings = settings or current_connection() or ConnectionSettings()
+
+    def named(provider, model):
+        return display_name(provider) + " / " + (model or ("CLI 默认模型" if provider in {"codex", "claude"} else ""))
     if settings.provider == "auto":
-        return "自动（Codex → Claude Code → DeepSeek API，调用时按额度决定）"
-    return display_name(settings.provider)
+        if not (settings.model or settings.claude_model):
+            return "自动（Codex → Claude Code → DeepSeek API，调用时按额度决定）"
+        return f"自动（{named('codex', settings.model)} → {named('claude', settings.claude_model)} → DeepSeek API，调用时按额度决定）"
+    if settings.provider == "deepseek":
+        return named("deepseek", settings.model or config.ROLE_MODELS["architect"][1])
+    return named(settings.provider, settings.model)
 
 
 def resolve_connection(settings=None) -> ConnectionSelection:
@@ -530,6 +562,8 @@ def invoke_connection(system: str, user: str, *, settings=None, timeout=None, on
         return invoke(selected.provider, selected.model, system + "\n\n" + user,
                       timeout=timeout or config.CLI_TIMEOUT_S, environment=config.CLI_ENV,
                       on_progress=on_progress)
+    if selected.provider == "anthropic":
+        return _invoke_anthropic(selected, system, user, timeout=timeout, on_progress=on_progress)
     from openai import OpenAI
     from service.model_budget import BudgetExceeded, model_request
     from agent_cli import _EventProgress
@@ -554,6 +588,43 @@ def invoke_connection(system: str, user: str, *, settings=None, timeout=None, on
         raise
     except Exception:
         # SDK异常可能含请求头或响应正文，不能原样交给TUI/checkpoint。
+        raise ConnectionError("AI OS API 调用失败；请检查接入地址、模型、密钥与账户额度") from None
+
+
+def anthropic_base_url(base_url: str) -> str:
+    """SDK 会自行拼上 /v1/messages；用户常把 /v1 一起填进来，去掉以免变成 /v1/v1。"""
+    url = (base_url or "").strip().rstrip("/")
+    return url[:-3] if url.endswith("/v1") else url
+
+
+def _invoke_anthropic(selected, system, user, *, timeout=None, on_progress=None) -> AgentReply:
+    """Anthropic 兼容 Messages API（官方 SDK + 自定义 base_url）；与 OpenAI 兼容分支同样计入模型预算、不外泄异常正文。"""
+    import config
+    import anthropic
+    from service.model_budget import BudgetExceeded, model_request
+    from agent_cli import _EventProgress
+    progress = _EventProgress(selected.provider, on_progress)
+    try:
+        progress.notify("api_started")
+        with model_request(selected.provider), anthropic.Anthropic(
+                api_key=selected.api_key, base_url=anthropic_base_url(selected.base_url),
+                timeout=timeout or config.LLM_READ_TIMEOUT_S, max_retries=0) as client:
+            response = client.messages.create(model=selected.model, max_tokens=config.AI_OS_ANTHROPIC_MAX_TOKENS,
+                                              system=system, messages=[{"role": "user", "content": user}])
+        if response.stop_reason == "max_tokens":
+            raise ConnectionError("AI OS API 返回被截断的文本（达到输出上限）")
+        if response.stop_reason == "refusal":
+            raise ConnectionError("AI OS API 拒绝了本次请求")
+        text = "".join(block.text for block in response.content if block.type == "text")
+        if not text.strip():
+            raise ConnectionError("AI OS API 未返回完整文本")
+        progress.events, progress.content_chars = 1, len(text)
+        progress.notify("completed")
+        return AgentReply(text, selected.model, response.model or selected.model, provider=selected.provider)
+    except (BudgetExceeded, ConnectionError):
+        raise
+    except Exception:
+        # SDK 异常可能含请求头或响应正文，不能原样交给 TUI/checkpoint。
         raise ConnectionError("AI OS API 调用失败；请检查接入地址、模型、密钥与账户额度") from None
 
 

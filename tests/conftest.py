@@ -11,6 +11,8 @@ os.environ["MOCK_LLM"] = "1"
 os.environ["MEMORY_ENABLED"] = "0"
 # 测试里把 MOCK_LLM 临时关掉、用替身代替 CLI 时，不能触发真实额度探测；路由测试自行改成 auto 并注入假探测。
 os.environ["WRITING_ROLE_FALLBACK"] = "strict"
+# 接入页的“自动”选项由本机私有文件 writing.local.json 开启；测试不受开发者本机设置影响，需要时自行打开。
+os.environ["WRITING_AI_OS_AUTO"] = "0"
 # 运行时目录也隔离，避免测试把检查点、额度文件写进仓库的 .runtime。
 import tempfile
 os.environ.setdefault("WRITING_RUNTIME_DIR", tempfile.mkdtemp(prefix="writing-runtime-"))

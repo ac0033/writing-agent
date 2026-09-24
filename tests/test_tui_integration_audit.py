@@ -106,7 +106,7 @@ def test_terminal_full_flow_summary_revision_sample_final_and_save(tmp_path, mon
     import config
     import graph
     from tui import WritingApp
-    from textual.widgets import RichLog, Button, Checkbox, Input, TextArea
+    from textual.widgets import Button, Checkbox, Input, TextArea
     from tools import publishing
     import hashlib
     from pathlib import Path
@@ -138,6 +138,8 @@ def test_terminal_full_flow_summary_revision_sample_final_and_save(tmp_path, mon
                         pytest.fail(status["error"])
                     if not app._action_pending and status.get("status") in {"awaiting_human", "completed"}:
                         app.refresh_status()
+                        # 按钮随阶段显示，等页面按新阶段完成布局后再点击。
+                        await pilot.pause()
                         if kind:
                             assert status["interrupt"]["kind"] == kind
                         return status
@@ -197,7 +199,7 @@ def test_terminal_full_flow_summary_revision_sample_final_and_save(tmp_path, mon
                     break
                 await pilot.pause(0.02)
             await settled()
-            trail = [line.text for line in app.query_one("#chat", RichLog).lines][-6:]
+            trail = app.chat_text()[-600:]
             assert publications == [{"confirmed": True, "approval_token": "test-token"}], (trail, app._action_pending, app.controller.publish_preview is None)
             assert app.query_one("#publish-confirm", Button).disabled
     asyncio.run(scenario())

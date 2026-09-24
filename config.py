@@ -17,6 +17,27 @@ load_dotenv(ENV_PATH)
 RUNTIME_DIR = Path(os.getenv("WRITING_RUNTIME_DIR", str(Path(__file__).parent / ".runtime")))
 RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
 
+# ---- 本机私有设置 ----
+# writing.local.json 放在仓库根、已 gitignore，只影响本机，不随开源发布；缺失或格式不对时按空设置处理。
+# 目前只有 ai_os_auto：接入页是否提供“自动”（按额度在 Codex / Claude Code / DeepSeek 间切换）。
+# 这个模式依赖作者本机同时装有两个 CLI 并有额度，对其他使用者不适用，所以默认不显示。
+LOCAL_SETTINGS_FILE = Path(__file__).parent / "writing.local.json"
+
+
+def _local_settings() -> dict:
+    import json
+    try:
+        value = json.loads(LOCAL_SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+LOCAL_SETTINGS = _local_settings()
+# 环境变量 WRITING_AI_OS_AUTO=1/0 优先于本机文件，便于临时切换。
+AI_OS_AUTO_ENABLED = (os.getenv("WRITING_AI_OS_AUTO") == "1" if os.getenv("WRITING_AI_OS_AUTO") in {"0", "1"}
+                      else LOCAL_SETTINGS.get("ai_os_auto") is True)
+
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
@@ -99,6 +120,13 @@ for _role, (_provider, _model) in list(ROLE_MODELS.items()):
         os.getenv(f"WRITING_{_role.upper()}_PROVIDER", _provider),
         os.getenv(f"WRITING_{_role.upper()}_MODEL", _model),
     )
+# ---- AI OS 接入页的模型目录 ----
+# Codex 以 app-server model/list 实时返回的账户模型为准；Claude Code 没有只读的模型列表接口，
+# 用这里的已知标识把手写输入（如“Opus 5.5”）规范成 CLI 认可的写法。目录外但格式正确的标识照样放行，首次调用由 CLI 校验。
+AI_OS_CLAUDE_MODELS = ("claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5-20251001",
+                       "opus", "sonnet", "haiku")
+# Anthropic 兼容 API 必须显式给输出上限；非流式请求取 16000，既够 AI OS 的调度输出，又不触发 SDK 的长请求超时。
+AI_OS_ANTHROPIC_MAX_TOKENS = int(os.getenv("WRITING_AI_OS_ANTHROPIC_MAX_TOKENS", "16000"))
 CLI_TIMEOUT_S = int(os.getenv("WRITING_CLI_TIMEOUT_S", "900"))
 
 # ---- 专业节点的接入解析（ai_os_connection.resolve_role）----

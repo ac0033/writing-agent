@@ -100,7 +100,7 @@ def test_terminal_budget_form_requires_values_and_does_not_resume(tmp_path, monk
             task = controller.manager.tasks["a"]
             assert task["status"] == "failed"
             assert "additional_model_calls" in task, (type(app.screen).__name__, app._action_pending,
-                [line.text for line in app.screen_stack[0].query_one("#chat").lines])
+                app.chat_text())
             assert task["additional_model_calls"] == 2 and task["additional_seconds"] == 60
             assert len(task["budget_events"]) == 1
     asyncio.run(scenario())

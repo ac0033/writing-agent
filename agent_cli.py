@@ -33,7 +33,8 @@ class AgentReply:
 
 # 界面和日志使用产品名称；provider 标识只用于配置与路由。
 DISPLAY_NAMES = {"codex": "Codex", "claude": "Claude Code", "codebuddy": "CodeBuddy",
-                 "deepseek": "DeepSeek API", "api": "自定义 API", "qwen": "千问 API"}
+                 "deepseek": "DeepSeek API", "api": "OpenAI 兼容 API", "anthropic": "Anthropic 兼容 API",
+                 "qwen": "千问 API"}
 
 
 def display_name(provider: str) -> str:

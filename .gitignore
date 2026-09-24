@@ -23,6 +23,9 @@ corpus/
 /.claude/
 /.kimi-code/
 
+# 本机私有设置（如接入页的“自动”选项），不随开源发布
+/writing.local.json
+
 # 兜底：任何密钥文件都不入库
 .env
 .env.*

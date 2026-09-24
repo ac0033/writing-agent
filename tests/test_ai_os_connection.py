@@ -258,3 +258,13 @@ def test_statusline_capture_cli_reads_utf8_paths_and_prints_utf8(tmp_path):
     assert done.returncode == 0 and done.stdout.decode("utf-8") == "AI OS 额度已同步"
     saved = json.loads(target.read_text(encoding="utf-8"))
     assert set(saved) == {"observed_at", "source", "rate_limits"} and "软件安装" not in target.read_text(encoding="utf-8")
+
+
+def test_auto_fallback_to_claude_uses_chosen_claude_model():
+    """自动模式：model 只给 Codex；Codex 额度不足转 Claude Code 时用接入页另选的 Claude 模型。"""
+    import time
+    import ai_os_connection as c
+    manager = c.ConnectionManager(lambda: c.QuotaStatus("codex", 3, time.time(), "Codex 剩余 3%"),
+                                  lambda: c.QuotaStatus("claude", 40, time.time(), "Claude 剩余 40%"))
+    chosen = manager.resolve(c.ConnectionSettings(model="gpt-6-astra", claude_model="claude-opus-5-5"))
+    assert (chosen.provider, chosen.model) == ("claude", "claude-opus-5-5")

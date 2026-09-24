@@ -97,7 +97,8 @@ def test_display_names_follow_the_actual_connection():
     assert c.describe_selection(selected) == "Claude Code / CLI 默认模型"
     assert c.describe_selection(c.ConnectionSelection("deepseek", "deepseek-v4-pro")) == "DeepSeek API / deepseek-v4-pro"
     assert "Codex → Claude Code → DeepSeek API" in c.describe_settings(c.ConnectionSettings())
-    assert c.describe_settings(c.ConnectionSettings(provider="claude")) == "Claude Code"
+    assert c.describe_settings(c.ConnectionSettings(provider="claude")) == "Claude Code / CLI 默认模型"
+    assert c.describe_settings(c.ConnectionSettings(provider="codex", model="gpt-6-sol")) == "Codex / gpt-6-sol"
     manager = c.ConnectionManager(codex_probe=lambda: c.QuotaStatus("codex", 0, time.time(), "Codex 报告已达到额度上限"),
                                   claude_probe=lambda: c.QuotaStatus("claude", 29, time.time(), "Claude Code 最低窗口剩余 29%"))
     chosen = manager.resolve(c.ConnectionSettings())

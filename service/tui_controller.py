@@ -148,6 +148,9 @@ class TuiController:
             decision = {"feedback": text, "approved": False, "route": "feedback",
                         "expected_summary_version": payload.get("summary_version"),
                         "expected_article_version": payload.get("article_version")}
+            if payload.get("kind") == "final" and status.get("pipeline_version") != "v2":
+                # 旧流程（v1）终审只认 approve / content / style；“退回修改”对应 content（回初稿重写并重新审核）。
+                decision = {"route": "content", "feedback": text}
             if payload.get("kind") == "sample" and text.strip().upper() in {"A", "B"}:
                 decision["choice"] = text.strip().upper()
                 decision["feedback"] = ""
@@ -217,7 +220,7 @@ class TuiController:
             task = self.manager.tasks.get(self.task_id)
             if not task:
                 raise ValueError("请先开始或选择一个任务，再设置分工")
-            return {"task_id": self.task_id, "config": dict(config.ROLE_MODELS),
+            return {"task_id": self.task_id, "topic": task.get("topic", ""), "config": dict(config.ROLE_MODELS),
                     "overrides": dict(task.get("role_settings", {})), "routes": list(task.get("routes", []))[-7:],
                     "status": task.get("status", "")}
 
@@ -229,3 +232,45 @@ class TuiController:
         return self.manager.configure_jev(self.task_id, {"action": "preference", "text": text,
             "id": uuid.uuid4().hex, "source_ref": "TUI用户偏好输入", "scope": self.status()["topic_id"],
             "user_event_id": uuid.uuid4().hex})
+
+
+HISTORY_SOURCES_FILE = "history_sources.json"
+
+
+def load_history_sources(home: Path) -> dict:
+    """本机登记的额外历史来源（在运行目录里，不入库）：
+
+    task_dirs：其他任务目录（含 tasks.json 与 checkpoints.sqlite），任务留在原处，选中时页面切换到该目录；
+    articles：没有任务记录的已发布文章（如管道外改定的稿），只读查看，[{"path": 正文, "note": 说明文件}]。
+    相对路径以仓库根为基准。
+    """
+    import json
+    import config
+    try:
+        value = json.loads((Path(home) / HISTORY_SOURCES_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"task_dirs": [], "articles": []}
+    resolve = lambda item: (config.BASE_DIR / item).resolve() if not Path(item).is_absolute() else Path(item)
+    dirs = [resolve(item) for item in value.get("task_dirs", []) if isinstance(item, str)]
+    articles = [{"path": resolve(item["path"]), "note": resolve(item["note"]) if item.get("note") else None}
+                for item in value.get("articles", []) if isinstance(item, dict) and item.get("path")]
+    return {"task_dirs": [d for d in dirs if (d / "tasks.json").is_file()],
+            "articles": [a for a in articles if a["path"].is_file()]}
+
+
+def read_task_list(directory: Path) -> list[tuple[str, str, str]]:
+    """只读列出某任务目录的任务 [(主题, 状态, 任务ID)]，按更新时间倒序；不实例化任务管理器，不触碰检查点。"""
+    import json
+    try:
+        tasks = json.loads((Path(directory) / "tasks.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    rows = sorted(tasks.items(), key=lambda kv: kv[1].get("updated_at", ""), reverse=True)
+    return [(task.get("topic", key), task.get("status", ""), key) for key, task in rows if isinstance(task, dict)]
+
+
+def article_title(path: Path) -> str:
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return Path(path).parent.name
