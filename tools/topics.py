@@ -46,9 +46,12 @@ def prepare(topic: str, pyramid_markdown: str, topic_id: str = "") -> dict:
     meta = {"schema": "writing-topic-v1", "topic": topic, "topic_id": identity}
     body = "<!-- writing-topic: " + json.dumps(meta, ensure_ascii=False) + " -->\n"
     body += f"# {topic}\n\n" + pyramid_markdown.strip() + "\n"
-    config.TOPIC_DIR.mkdir(parents=True, exist_ok=True)
+    # 每个主题一个目录，输入材料放在 topic/<主题目录>/sources/，与 output/<主题目录>/ 的版本线对应。
+    from tools.lineage import topic_dir
+    sources = topic_dir(identity, topic) / "sources"
+    sources.mkdir(parents=True, exist_ok=True)
     slug = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "-", topic)[:48].rstrip(". ")
-    path = config.TOPIC_DIR / f"{date.today()}-{slug}-{uuid.uuid4().hex[:12]}.md"
+    path = sources / f"{date.today()}-{slug}-{uuid.uuid4().hex[:12]}.md"
     # 独占创建：同主题的新提炼也保留旧版本与人工修改。
     with path.open("x", encoding="utf-8", newline="\n") as f:
         f.write(body)
@@ -69,8 +72,10 @@ def prepare_source(topic: str, source_text: str, topic_id: str = "") -> dict:
     meta = {"schema": "writing-source-v2", "topic": topic, "topic_id": identity}
     body = "<!-- writing-topic: " + json.dumps(meta, ensure_ascii=False) + " -->\n"
     body += f"# {topic}\n\n" + source_text.strip() + "\n"
-    config.TOPIC_DIR.mkdir(parents=True, exist_ok=True)
-    path = config.TOPIC_DIR / f"{date.today()}-source-{uuid.uuid4().hex[:12]}.md"
+    from tools.lineage import topic_dir
+    sources = topic_dir(identity, topic) / "sources"
+    sources.mkdir(parents=True, exist_ok=True)
+    path = sources / f"{date.today()}-source-{uuid.uuid4().hex[:12]}.md"
     with path.open("x", encoding="utf-8", newline="\n") as handle:
         handle.write(body)
     return {**meta, "topic_file": str(path.resolve()), "idea": body,

@@ -40,7 +40,7 @@ uv run python -m service.writing_server  # 启动 MCP 服务（cwd 必须是仓�
 - `tests/` — 全部测试；`tests/conftest.py` 在收集阶段设 `MOCK_LLM=1`、`MEMORY_ENABLED=0`、`WRITING_ROLE_FALLBACK=strict`
 - `.runtime/` — 本机运行时状态（`config.RUNTIME_DIR`，已 gitignore）：检查点、会话登记、任务登记簿、心跳、TUI 任务、额度文件、原文缓存、pytest 临时目录
 - `.notes/` — 开发者私人材料（方案、验收记录、一次性脚本，已 gitignore）；`tests/test_public_hygiene.py` 守住私人信息不入库与版本号一致
-- `output/` — 每篇文章一个文件夹：`article.md`（确认稿）、`evidence.json`、`thinking.md`；`topic/` — 用户的主题材料。二者是用户数据，不入库
+- `topic/<主题目录>/` — 材料（`sources/`、`materials/`）与各版写作过程（`process/`）；`output/<主题目录>/` — 该主题的版本线（`v1/`、`v2/`… 各含 `article.md`、`evidence.json`、`thinking.md`，`versions.json` 为日志，只追加不分叉，由 `tools/lineage.py` 维护）。二者是用户数据，不入库，结构见 `docs/topic目录说明.md`
 
 ## 关键约定（改动时必须遵守）
 

@@ -821,21 +821,18 @@ def route_after_final(state: WritingState) -> str:
 
 def save(state: WritingState) -> dict:
     _wm_sync(state, "save")
-    # 每篇文章一个独立文件夹：article.md（发布稿）+ thinking.md（思考留痕）
-    slug = re.sub(r'[\\/:*?"<>|\s]+', "-", state["topic"]).strip("-")[:40]
-    run_id = hashlib.sha256(state.get("thread_id", "unknown").encode()).hexdigest()[:12]
-    revision = hashlib.sha256(state["polished"].encode()).hexdigest()[:12]
-    run_dir = config.OUTPUT_DIR / f"{date.today().isoformat()}-{slug}-{run_id}" / revision
-    run_dir.mkdir(parents=True, exist_ok=True)
-
+    # 同一主题的成稿串成一条版本线：output/<主题目录>/v<N>/article.md（发布稿）+ thinking.md（思考留痕），
+    # versions.json 记录每版的上一版、来源与正文哈希；同一次运行重试保存同一正文不会重复追加。
+    from tools.identity import topic_id as resolve_topic_id
+    from tools.lineage import append_version
     # 剥离各 agent 留下的 HTML 注释元信息（修改说明/润色说明等）及其造成的多余空行
     article = re.sub(r"<!--.*?-->", "", state["polished"], flags=re.S)
     article = re.sub(r"\n{3,}", "\n\n", article).strip() + "\n"
+    identity = resolve_topic_id(state["topic"], state.get("topic_id", ""))
+    run_dir = append_version(identity, state["topic"], article, source={
+        "source": "写作管道", "thread_id": state.get("thread_id", ""),
+        "pipeline_version": state.get("pipeline_version", "v1")})
     article_path = run_dir / "article.md"
-    if article_path.exists() and article_path.read_text(encoding="utf-8") != article:
-        raise ValueError("该版本的本地稿件已被人工修改，保留原文件；请生成新版本后保存")
-    # 固定 LF 字节，Windows 换行转换不能让已确认版本的 SHA256 失配。
-    article_path.write_bytes(article.encode("utf-8"))
 
     # 大纲和各节点的思考过程单独存一份，供回溯（白盒目标）
     blocks = [f"# 写作过程留痕\n\n## 最终大纲\n\n{state.get('outline', '')}\n"]

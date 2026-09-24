@@ -1,4 +1,5 @@
 """提炼入口必须先落盘、读取实际内容；测试不启动真实写作。"""
+import json
 from pathlib import Path
 import pytest
 import config
@@ -34,7 +35,9 @@ def brief(tmp_path, monkeypatch):
 def test_prepare_preserves_versions_and_reads_edits(brief):
     first = topics.prepare("工具 / 折旧", brief, "tool-value")
     path = Path(first["topic_file"])
-    assert path.parent == config.TOPIC_DIR and path.suffix == ".md"
+    # 每个主题一个目录：材料落在 topic/<主题目录>/sources/，目录里的 topic.json 记下归属。
+    assert path.parent == config.TOPIC_DIR / "tool-value" / "sources" and path.suffix == ".md"
+    assert json.loads((config.TOPIC_DIR / "tool-value" / "topic.json").read_text(encoding="utf-8"))["topic_id"] == "tool-value"
     assert topics.load(str(path))["topic_sha256"] == first["topic_sha256"]
     changed = path.read_text(encoding="utf-8").replace("无定量模型。", "用户补充：公式仅作类比。")
     path.write_text(changed, encoding="utf-8")
