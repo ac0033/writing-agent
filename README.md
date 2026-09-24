@@ -6,19 +6,19 @@
 
 - `pipeline_v2.py`、`graph.py`、`state.py` — 写作图与节点
 - `tui.py`、`main.py`、`service/` — 终端页面、命令行、MCP 服务与任务管理
-- `llm.py`、`agent_cli.py`、`ai_os_connection.py`、`config.py` — 模型调用、CLI 适配、接入解析、配置
+- `llm.py`、`agent_cli.py`、`ai_os_connection.py`、`ai_os_setup.py`、`config.py` — 模型调用、CLI 适配、接入解析、接入页的检测与模型规范化、配置
 - `jev_adapter.py`、`service/jev_settings.py`、`scripts/jev_evaluate.py` — JEV 偏好选择与评估
-- `prompts/` — 角色 prompt 与写作规范；`tools/` — 检索、证据核对、发布、记忆
+- `prompts/` — 角色 prompt 与写作规范；`tools/` — 检索、证据核对、发布、记忆、主题版本线（`lineage.py`）
 - `tests/` — 测试；`docs/` — 使用文档与 CHANGELOG；`scripts/accept_v2.py` — 真实验收脚本
-- `.runtime/`（生成）— 本机运行时状态；`topic/`、`output/`、`corpus/`（生成）— 用户材料、文章产物、素材库，不入库
+- `.runtime/`（生成）— 本机运行时状态；`topic/`、`output/`、`corpus/`（生成）— 用户材料、文章版本线、素材库，不入库（结构见 [topic 与 output 目录](docs/topic目录说明.md)）
 
 ## 终端对话界面
 
-在项目目录运行 `uv run python tui.py`。输入主题与材料后点“发送 / 开始”，AI OS先生成摘要；明确点击“确认当前摘要”后才进入正式写作。修改意见直接发到对话区，成稿确认与发布确认分别处理。运行状态和已完成节点在页面更新，历史任务可继续。
+在项目目录运行 `uv run python tui.py`。输入主题与材料后点“开始写作”，AI OS先生成摘要；明确点击“确认摘要”后才进入正式写作。修改意见直接发到对话区，成稿确认与发布确认分别处理。运行状态和已完成节点在页面更新，历史任务可继续。
 
-“接入设置”支持本机 Codex / Claude Code 非交互调用，以及 DeepSeek / OpenAI兼容API。密钥输入遮蔽，只保留在当前进程。默认自动选择Codex，每次调用前读取真实额度：Codex至少剩余15%，Claude至少10%，不可验证或不足则跳过，最后使用DeepSeek。手动选择某CLI不符合门槛时直接拒绝并提示。接入选择只影响AI OS，专业节点分工仍以config.py为准。
+启动后先进入“选择 AI OS 模型”页，分两步：先选接入方式，再从该方式的可选模型里选。页面会检测本机是否安装了 Codex 与 Claude Code，装了的显示版本并可直接用本机登录接入，没装的不可选；另外始终可以接 DeepSeek API、OpenAI 兼容 API 或 Anthropic 兼容 API（填地址与密钥后可读取模型列表）。手写的模型名会先核对再规范成标准写法。密钥输入遮蔽，只保留在当前进程。调用 Codex / Claude Code 前读取真实额度：Codex 至少剩余 15%，Claude 至少 10%，不可验证或不足则拒绝接入并提示。这里只选 AI OS 自己用的模型，各专业节点在顶栏“分工”里另设。
 
-本机运行时状态统一在 `.runtime/`（检查点、会话登记、MCP 任务登记簿、TUI 任务、额度文件、pytest 临时目录；可用 `WRITING_RUNTIME_DIR` 改位置）。TUI 任务默认在 `.runtime/tui/`；`--directory <目录>` 可接续验收脚本或 MCP 服务（`.runtime/service/`）创建的任务。专业节点分工可在页面“模型分工”里按任务修改，或用 `--role 角色=提供方[:模型]` 只对本次启动修改；每次调用前核验 CLI 额度，不足时按回退链切换并在页面显示实际接入（`WRITING_ROLE_FALLBACK=strict` 关闭回退）。`uv run python tui.py --mock`可无网络演练，模拟结果不算真实文章验收。可勾选“先确认短样稿”，在完整写作前选择A/B或提修改意见。页面操作详见[TUI使用说明](docs/TUI使用说明.md)。
+本机运行时状态统一在 `.runtime/`（检查点、会话登记、MCP 任务登记簿、TUI 任务、额度文件、pytest 临时目录；可用 `WRITING_RUNTIME_DIR` 改位置）。TUI 任务默认在 `.runtime/tui/`；`--directory <目录>` 可接续验收脚本或 MCP 服务（`.runtime/service/`）创建的任务。专业节点分工可在页面顶栏“分工”里按任务修改，或用 `--role 角色=提供方[:模型]` 只对本次启动修改；每次调用前核验 CLI 额度，不足时按回退链切换并在页面显示实际接入（`WRITING_ROLE_FALLBACK=strict` 关闭回退）。`uv run python tui.py --mock`可无网络演练，模拟结果不算真实文章验收。可勾选“先确认短样稿”，在完整写作前选择A/B或提修改意见。页面操作详见[TUI使用说明](docs/TUI使用说明.md)。
 
 Claude的额度数据接入、阈值与未知状态处理详见[AI OS额度接入说明](docs/AIOS_额度接入.md)。JEV保持关闭，偏好记录不等于允许向JEV外发或开放代决；维护与评估见[JEV验收计划](docs/jev验收计划.md)。
 
@@ -37,7 +37,7 @@ Claude的额度数据接入、阈值与未知状态处理详见[AI OS额度接�
 - JEV适配器已提供，但默认`off`。真实合成测试不等于已学会作者偏好；类别授权和实际评估后才可启用代决。
 - 连续范文通过`search_corpus/read_corpus`读取，实际提示词和skill加载清单进入过程记录。
 
-验收脚本：`uv run python scripts/accept_v2.py --directory topic/<主题>/<新验收目录> --source <原始材料.md> --topic "<文章标题>" --topic-id <主题标识>`。
+验收脚本：`uv run python scripts/accept_v2.py --directory topic/<主题目录>/process/<日期-验收> --source <原始材料.md> --topic "<文章标题>" --topic-id <主题标识>`。
 脚本使用隔离检查点，不自动确认摘要或成稿、不发布；重写结果与旧稿分别保留。
 调度行为与验收边界见[v2调度说明](docs/v2调度说明.md)及[JEV接入说明](docs/jev接入说明.md)。
 
@@ -53,7 +53,7 @@ Claude的额度数据接入、阈值与未知状态处理详见[AI OS额度接�
 
 聊天 MCP 入口强制先存主题文件：`writing_topic_guide()` 读取提炼规范，外层 agent 对照真实聊天整理，`writing_prepare_topic(topic, pyramid_markdown, topic_id)` 保存，再调用 `writing_start(topic_file=返回路径, auto_approve=False)`。禁止直接传聊天原文到 `idea`。文件校验只能检查结构完整，不能证明提炼忠实或事实已核实。
 
-主题文件保存在 `topic/日期-主题-版本标识.md`，每次提炼另存，不覆盖已有材料；任务记录保留文件路径、指纹及启动时的内容。可以先只保存主题供查看，已有写作授权才启动管道。终端也可用 `uv run python main.py --topic-file "topic/实际文件名.md"` 读取它；原 CLI 手工输入入口继续保留，不会自行读取宿主聊天。
+主题文件保存在 `topic/<主题目录>/sources/日期-主题-版本标识.md`，每次提炼另存，不覆盖已有材料；任务记录保留文件路径、指纹及启动时的内容。可以先只保存主题供查看，已有写作授权才启动管道。终端也可用 `uv run python main.py --topic-file "topic/<主题目录>/sources/实际文件名.md"` 读取它；原 CLI 手工输入入口继续保留，不会自行读取宿主聊天。
 
 配置六个模型角色。研究员内部规划搜索；最终核验使用独立的 final_check 角色配置，当前与 reviewer 同属Codex，以另一轮调用对照原文，并非独立模型家族或人工事实核查。模型、温度、预算只在 `config.py` 配置。
 
@@ -109,18 +109,20 @@ CLI 在真实稿件保存后展示发布预览，只有输入“发布”才推�
 
 wiki 检索展示笔记状态与核验日期，不把草稿当已核实来源；归档页跳过。文件变化后索引自动失效重建。
 
-稿件保存后生成：
+稿件保存后接到该主题的版本线末尾（每个主题一条线，只追加不分叉，见 [topic 与 output 目录](docs/topic目录说明.md)）：
 
 ```text
-output/YYYY-MM-DD-主题-运行标识/版本标识/
-  article.md         本地确认稿
-  evidence.json      来源、原文片段、论据清单、检查结果与正文指纹
-  reading.md         待读来源及写作用途
-  thinking.md        节点过程留痕
-  publication.json   仅尝试发布后出现
+output/<主题目录>/
+  versions.json      版本线日志：版本号、上一版、时间、来源、状态、正文 SHA256
+  v<N>/              第 N 版
+    article.md         本地确认稿
+    evidence.json      来源、原文片段、论据清单、检查结果与正文指纹
+    reading.md         待读来源及写作用途
+    thinking.md        节点过程留痕
+    publication.json   仅尝试发布后出现
 ```
 
-不同运行/版本互不覆盖。人工改过的旧版本不会被静默重写。证据包和过程日志默认不提交公开仓库。
+同一主题按 `topic_id` 归属，改标题不会另起一条线；同一次运行重试保存同一正文不会重复追加；已有版本不会被重写。证据包和过程日志默认不提交公开仓库。
 
 真实运行保存后调用知识库 `scripts/import_writing.py`，将新来源导入 draft 笔记和待读清单，原文片段按内容指纹保存，不冒充全文快照。已有笔记保持原样。失败只警告，保留本地证据包；可在知识库目录重试：
 
