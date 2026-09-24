@@ -280,14 +280,33 @@ def drive(task: dict, first_input, persist, checkpoint_db=None, on_saved=None) -
     return task
 
 
+def revision_seed(base: dict) -> dict:
+    """修订任务的起点：原稿作为现成稿件，大纲沿用原稿的标题结构，并标记待按作者要求修改。
+
+    这样 AI OS 在摘要确认后派初稿节点在原文上定向修改，再走审核、润色、核验与终审，而不是从头重写。
+    原稿按登记的哈希核对，文件被改动过就拒绝，免得在别人看不到的内容上修订。
+    """
+    import hashlib
+    import re
+    data = Path(base["path"]).read_bytes()
+    if hashlib.sha256(data).hexdigest() != base["sha256"]:
+        raise ValueError("修订起点的正文已变化，请重新从版本线选择")
+    article = data.decode("utf-8")
+    headings = [line.strip() for line in article.splitlines() if re.match(r"#{1,3} ", line)]
+    outline = (f"沿用第 {base['version']} 版的结构定向修订，不重新组织全文：\n" + "\n".join(headings)
+               if headings else f"沿用第 {base['version']} 版的结构定向修订，不重新组织全文。")
+    return {"draft": article, "outline": outline, "research_completed": True, "revision_pending": True,
+            "final_feedback": base["feedback"], "revision_base": {k: base[k] for k in ("version", "sha256", "path")}}
+
+
 def start_task(task: dict, persist, checkpoint_db=None, on_saved=None) -> dict:
-    """新任务：用 task 里的 topic/idea/thread_id 组装初始 state 从头跑。"""
-    return drive(task,
-                 {**initial_state(task.get("topic", ""), task.get("idea", ""),
-                               task["thread_id"], task.get("topic_id", "")),
-                  "pipeline_version": task.get("pipeline_version", "v1"),
-                  "sample_requested": task.get("sample_requested", False)},
-                 persist, checkpoint_db, on_saved)
+    """新任务：用 task 里的 topic/idea/thread_id 组装初始 state 从头跑；修订任务另带原稿起点。"""
+    state = {**initial_state(task.get("topic", ""), task.get("idea", ""), task["thread_id"], task.get("topic_id", "")),
+             "pipeline_version": task.get("pipeline_version", "v1"),
+             "sample_requested": task.get("sample_requested", False)}
+    if task.get("revision_base"):
+        state.update(revision_seed(task["revision_base"]))
+    return drive(task, state, persist, checkpoint_db, on_saved)
 
 
 def resume_task(task: dict, decision: dict, persist, checkpoint_db=None,

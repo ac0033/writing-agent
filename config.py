@@ -217,6 +217,11 @@ BLOG_REMOTE = os.getenv("BLOG_REMOTE", "origin")
 BLOG_BRANCH = os.getenv("BLOG_BRANCH", "main")
 
 MOCK_LLM = os.getenv("MOCK_LLM", "") == "1"
+# 模拟模式的稿件是占位文本：成稿与主题材料一律写进运行目录的 mock 区，绝不接到真实主题的版本线上。
+MOCK_DATA_DIR = RUNTIME_DIR / "mock"
+if MOCK_LLM:
+    OUTPUT_DIR = MOCK_DATA_DIR / "output"
+    TOPIC_DIR = MOCK_DATA_DIR / "topic"
 
 # ---- agent-memory 记忆服务（MCP over HTTP，接入指南方式一）----
 # 服务常驻本机回环地址（agent-memory 仓库的计划任务维护），本项目作为 MCP 客户端接入。

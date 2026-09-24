@@ -418,8 +418,9 @@ def test_history_lists_linked_dirs_and_readonly_articles(tmp_path):
             app.screen.dismiss("article|0")
             await pilot.pause()
             assert "已发布标题" in app.chat_text() and not app.controller.task_id
-            assert not any(app.query_one("#" + key).display for key in ACTION_IDS)
-            assert not app.query_one("#composer").display
+            # 只读文章只提供“退回修改”：写意见后基于这一版开修订任务，没有确认、保存或发布按钮。
+            assert {key for key in ACTION_IDS if app.query_one("#" + key).display} == {"send"}
+            assert str(app.query_one("#send").label) == "退回修改" and app.query_one("#composer").display
             app.history_chosen("task|1|b2")
             await pilot.pause()
             assert app.directory.resolve() == other.resolve() and app.controller.task_id == "b2"
@@ -450,3 +451,61 @@ def test_v1_final_feedback_maps_to_content_route_and_forced_pass_is_disclosed(tm
     asyncio.run(scenario())
     controller.send("请重写第二节")
     assert resumed == [{"route": "content", "feedback": "请重写第二节"}]
+
+
+def test_revise_published_version_appends_to_lineage(tmp_path, monkeypatch):
+    """已发布的版本也能退回修改：修订任务以原稿为起点，确认摘要后定向修改，终审保存后接到版本线末尾。"""
+    import json
+    import time
+    import config
+    from pathlib import Path
+    from tools.lineage import append_version
+    from service.tui_controller import TuiController
+    monkeypatch.setattr(config, "TOPIC_DIR", tmp_path / "topic")
+    monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "output")
+    base = append_version("blog9", "旧文章", "# 旧文章\n\n## 第一节\n\n原文第一段。\n", source={"thread_id": "x"})
+    controller = TuiController(tmp_path / "tui")
+
+    def settle(kind):
+        for _ in range(500):
+            status = controller.status()
+            if status.get("status") == "failed":
+                raise AssertionError(status["error"])
+            if status.get("status") in {"awaiting_human", "completed"} and (not kind or status["interrupt"]["kind"] == kind):
+                return status
+            time.sleep(0.01)
+        raise AssertionError(controller.status())
+
+    with pytest.raises(ValueError, match="修改意见"):
+        controller.revise(base / "article.md", " ")
+    started = controller.revise(base / "article.md", "第一节补充一个例子")
+    assert started["version"] == 1
+    summary = settle("summary")
+    assert "第一节补充一个例子" in summary["shared_summary"]
+    task = controller.manager.tasks[started["task_id"]]
+    assert task["revision_base"]["version"] == 1 and task["topic_id"] == "blog9"
+    controller.show_interrupt(summary["interrupt"])
+    controller.approve()
+    final = settle("final")
+    controller.show_interrupt(final["interrupt"])
+    controller.approve()
+    done = settle(None)
+    assert done["status"] == "completed"
+    log = json.loads((tmp_path / "output" / "blog9" / "versions.json").read_text(encoding="utf-8"))
+    assert [v["version"] for v in log["versions"]] == [1, 2] and log["versions"][1]["based_on"] == 1
+    assert Path(done["output_path"]).parent.name == "v2"
+
+
+def test_mock_mode_never_touches_real_articles(tmp_path, monkeypatch):
+    """模拟模式的占位稿不能接到真实版本线；--mock 也不能打开已有真实任务的目录（曾因此覆盖过真实文章）。"""
+    import sys
+    import config
+    import tui
+    assert config.MOCK_LLM and config.OUTPUT_DIR == config.MOCK_DATA_DIR / "output"
+    assert config.TOPIC_DIR == config.MOCK_DATA_DIR / "topic"
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "tasks.json").write_text('{"a": {"task_id": "a"}}', encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["tui.py", "--mock", "--directory", str(real)])
+    with pytest.raises(SystemExit, match="模拟模式不能打开"):
+        tui.main()

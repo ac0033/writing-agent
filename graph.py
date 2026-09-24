@@ -831,7 +831,8 @@ def save(state: WritingState) -> dict:
     identity = resolve_topic_id(state["topic"], state.get("topic_id", ""))
     run_dir = append_version(identity, state["topic"], article, source={
         "source": "写作管道", "thread_id": state.get("thread_id", ""),
-        "pipeline_version": state.get("pipeline_version", "v1")})
+        "pipeline_version": state.get("pipeline_version", "v1"),
+        **({"based_on": state["revision_base"]["version"]} if state.get("revision_base") else {})})
     article_path = run_dir / "article.md"
 
     # 大纲和各节点的思考过程单独存一份，供回溯（白盒目标）

@@ -24,7 +24,8 @@ class TuiController:
 
     def execute(self, action, args, task_id, displayed):
         """线程动作绑定点击时的任务与所见内容，切换历史任务后不能误操作新任务。"""
-        if action not in {"start", "send", "approve", "retry", "preference", "preview", "publish", "extend_budget", "configure_roles"}:
+        if action not in {"start", "send", "approve", "retry", "preference", "preview", "publish", "extend_budget",
+                          "configure_roles", "revise"}:
             raise ValueError("未知终端动作")
         with self._view_lock:
             if self.task_id != task_id:
@@ -100,6 +101,32 @@ class TuiController:
             sample_requested=sample_requested)
         self.displayed = None
         return self.task_id
+
+    def revise(self, base_path, feedback: str):
+        """对版本线里已保存/已发布的某一版退回修改：以同一主题开一个 v2 修订任务，原稿作为起点。
+
+        修改要求写进原始材料，经摘要确认后才动笔；新稿保存时接到该主题版本线的末尾。
+        """
+        from tools.lineage import version_of
+        from tools.topics import prepare_source
+        feedback = (feedback or "").strip()
+        if not feedback:
+            raise ValueError("请先写下修改意见")
+        if self.task_id and self.status().get("status") in {"pending", "running"}:
+            raise ValueError("当前任务仍在运行")
+        base = version_of(base_path)
+        if not base:
+            raise ValueError("只能对版本线里未被改动的稿件退回修改")
+        article = Path(base["path"]).read_text(encoding="utf-8")
+        source = (f"【修订任务】在《{base['title']}》第 {base['version']} 版上按作者要求修改，其余内容保持原样。\n\n"
+                  f"【作者的修改要求】\n{feedback}\n\n【第 {base['version']} 版正文】\n{article}")
+        prepared = prepare_source(base["title"], source, base["topic_id"])
+        task_id = self.manager.start(base["title"], prepared["idea"], False, prepared["topic_id"],
+            topic_file=prepared["topic_file"], topic_sha256=prepared["topic_sha256"], pipeline_version="v2",
+            revision_base={"version": base["version"], "sha256": base["sha256"], "path": base["path"], "feedback": feedback})
+        with self._view_lock:
+            self.task_id, self.displayed, self.publish_preview = task_id, None, None
+        return {"task_id": task_id, "version": base["version"], "title": base["title"]}
 
     def select(self, task_id):
         with self._view_lock:

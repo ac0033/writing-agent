@@ -110,6 +110,7 @@ class WritingState(TypedDict, total=False):
     additional_seconds: int
     additional_revisions: int
     revision_pending: bool
+    revision_base: dict       # 修订任务的起点：版本线里的版本号、正文哈希与路径；保存时记为 based_on
     review_dimensions: dict
     issue_registry: dict
     active_issue_ids: list[str]

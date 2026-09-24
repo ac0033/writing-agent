@@ -638,9 +638,11 @@ STAGES = {
     "sample": ("待选短样稿", "点选一版，或写修改意见。", "在此输入修改意见……"),
     "decision": ("待你决定", "AI OS 需要你的回复。", "在此输入你的回复……"),
     "final": ("待终审", "确认署名后保存到本地；要改就写意见再退回。发布另行确认。", "在此输入修改意见……"),
-    "completed": ("已保存", "已保存到本地。发布前先看预览，再单独确认。", ""),
+    "completed": ("已保存", "已保存到本地。发布前先看预览再单独确认；要改就写意见点“退回修改”。",
+                  "写下修改意见，点“退回修改”会基于这一版开一轮修订……"),
     "failed": ("已中断", "断点已保留：直接续跑；额度不够就先追加预算。", ""),
-    "archive": ("已发布（只读）", "只读查看已发布文章；要写新文章点“＋ 新文章”。", ""),
+    "archive": ("已发布（只读）", "要改就写意见点“退回修改”，会基于这一版开一轮修订；写新文章点“＋ 新文章”。",
+                "写下修改意见，点“退回修改”会基于这一版开一轮修订……"),
 }
 # 操作行按钮按固定顺序排列（主操作在最右），每个阶段只显示其中几个。
 STAGE_BUTTONS = {
@@ -650,12 +652,12 @@ STAGE_BUTTONS = {
     "sample": {"send", "choose-a", "choose-b"},
     "decision": {"send"},
     "final": {"send", "approve"},
-    "completed": {"publish-preview"},
+    "completed": {"publish-preview", "send"},
     "failed": {"budget", "retry"},
-    "archive": set(),
+    "archive": {"send"},
 }
 SEND_LABELS = {"idle": "开始写作", "running": "补充说明", "summary": "提交修改意见", "sample": "提交修改意见",
-               "decision": "回复", "final": "退回修改"}
+               "decision": "回复", "final": "退回修改", "completed": "退回修改", "archive": "退回修改"}
 ACTION_IDS = ("sample", "budget", "send", "choose-a", "choose-b", "retry", "approve", "publish-preview", "publish-confirm")
 
 
@@ -808,11 +810,12 @@ class WritingApp(App):
     BINDINGS = [Binding("ctrl+enter,ctrl+s", "send", "发送", show=False), Binding("f1", "keys", "快捷键", show=False),
                 Binding("ctrl+q", "quit", "退出并保留断点", show=False, priority=True)]
 
-    def __init__(self, directory: Path, *, controller=None, choose_connection=False, detector=None):
+    def __init__(self, directory: Path, *, controller=None, choose_connection=False, detector=None, mock=False):
         """choose_connection=True 时先显示接入页（正式启动）；测试与嵌入场景默认跳过，沿用自动接入。"""
         super().__init__()
         from ai_os_setup import load_choice
         self.choose_connection = choose_connection
+        self.mock = mock  # 模拟模式：占位稿不能发布，页面标明“模拟”
         self.detector = detector
         self.clis = None
         self.remembered = load_choice(directory)
@@ -841,7 +844,7 @@ class WritingApp(App):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
-            yield Static("✎ 写作管道", id="brand")
+            yield Static("✎ 写作管道" + (" · 模拟" if self.mock else ""), id="brand")
             yield Static("新文章", id="task-title")
             yield Button("历史", id="history")
             yield Button("接入", id="connection")
@@ -968,7 +971,7 @@ class WritingApp(App):
     def apply_stage(self, status):
         """只显示当前阶段用得上的输入与按钮；确认类按钮另要求界面已展示待确认内容。"""
         main = self._main()
-        stage = "archive" if self._viewing_article and not status else stage_of(status)
+        stage = self.current_stage(status)
         payload = status.get("interrupt") or {}
         paused = stage == "decision" and bool(payload.get("pause_reason"))
         preview_ready = stage == "completed" and self.controller.publish_preview is not None
@@ -984,6 +987,8 @@ class WritingApp(App):
             visible.add("budget")
         if preview_ready:
             visible.add("publish-confirm")
+        if self.mock:
+            visible -= {"publish-preview", "publish-confirm"}
         for identity in ACTION_IDS:
             widget = main.query_one("#" + identity)
             widget.display = identity in visible
@@ -995,7 +1000,7 @@ class WritingApp(App):
                                                           or status.get("pipeline_version") != "v2")
         send = main.query_one("#send", Button)
         send.label = SEND_LABELS.get(stage, "发送")
-        send.variant = "primary" if stage in {"idle", "running", "sample", "decision"} else "default"
+        send.variant = "primary" if stage in {"idle", "running", "sample", "decision", "archive"} else "default"
         main.query_one("#publish-preview", Button).variant = "default" if preview_ready else "primary"
         main.query_one("#composer").display = "send" in visible
         main.query_one("#topic").display = stage == "idle"
@@ -1144,6 +1149,9 @@ class WritingApp(App):
         self.submit_bound_action(action, args, task_id, displayed)
 
     def submit_bound_action(self, action, args, task_id, displayed):
+        if self.mock and action in {"preview", "publish"}:
+            self.notify("模拟模式的稿件是占位文本，不能发布", severity="warning")
+            return
         if self._quitting:
             self.notify("正在退出并回收当前任务，不能发起新操作", severity="warning")
             return
@@ -1194,6 +1202,11 @@ class WritingApp(App):
             self.query_one("#publish-confirm", Button).disabled = True
         elif action == "preference":
             self.post("已记录为本篇用户偏好。")
+        elif action == "revise":
+            self._viewing_article = None
+            self.marker, self._routes_shown, self._published, self._stage_key = None, 0, False, None
+            self.post(f"已基于第 {result['version']} 版开始修订（任务 {result['task_id']}）。AI OS 先把修改要求整理进摘要，"
+                      "请确认摘要后再动笔；改好的稿件照常审核、终审，确认保存后接到这条版本线的末尾。")
         elif action == "configure_roles":
             from agent_cli import display_name
             overrides = result.get("role_settings") or {}
@@ -1227,7 +1240,8 @@ class WritingApp(App):
     def action_send(self):
         if self._action_pending:
             return
-        stage = stage_of(self.controller.status())
+        status = self.controller.status()
+        stage = self.current_stage(status)
         if stage not in SEND_LABELS:
             return
         message = self.query_one("#message", Composer)
@@ -1240,7 +1254,11 @@ class WritingApp(App):
             return
         self.post(text, "user")
         message.clear()
-        if not self.controller.task_id:
+        if stage in {"completed", "archive"}:
+            # 已保存/已发布的版本退回修改：基于这一版开一个修订任务，不改动原版本。
+            base = status.get("output_path") if stage == "completed" else self._viewing_article.get("path", "")
+            self.submit_action("revise", base, text)
+        elif not self.controller.task_id:
             self.submit_action("start", self.query_one("#topic", Input).value, text,
                                self.query_one("#sample", Checkbox).value)
         else:
@@ -1395,6 +1413,9 @@ class WritingApp(App):
             self.post(re.sub(r"<!--.*?-->", "", output.read_text(encoding="utf-8"), flags=re.S).strip(),
                       "ai", "已保存的文章")
 
+    def current_stage(self, status):
+        return "archive" if self._viewing_article and not status else stage_of(status)
+
     def _busy(self):
         if self._action_pending or self.controller.status().get("status") in {"pending", "running"}:
             self.notify("当前任务仍在运行，先等它停在确认点或完成", severity="warning")
@@ -1433,7 +1454,7 @@ class WritingApp(App):
         self.controller.clear()
         self._reset_view()
         title = article_title(item["path"])
-        self._viewing_article = {"title": title}
+        self._viewing_article = {"title": title, "path": str(item["path"])}
         body = re.sub(r"<!--.*?-->", "", item["path"].read_text(encoding="utf-8"), flags=re.S).strip()
         self.post(body, "ai", "已发布文章（只读） · " + title)
         if item.get("note") and item["note"].is_file():
@@ -1466,16 +1487,22 @@ def apply_role_overrides(specs, environ=os.environ):
 def main():
     parser = argparse.ArgumentParser(description="AI OS 终端对话；默认按额度自动接入 Codex → Claude Code → DeepSeek API")
     parser.add_argument("--mock", action="store_true", help="模拟模式，不发送真实模型请求")
-    parser.add_argument("--directory", type=Path,
-                        default=Path(os.getenv("WRITING_RUNTIME_DIR") or Path(__file__).parent / ".runtime") / "tui",
-                        help="任务目录（含 tasks.json 与 checkpoints.sqlite）；默认 .runtime/tui，可指向验收运行目录或 .runtime/service")
+    parser.add_argument("--directory", type=Path, default=None,
+                        help="任务目录（含 tasks.json 与 checkpoints.sqlite）；默认 .runtime/tui（模拟模式 .runtime/tui-mock），"
+                             "可指向验收运行目录或 .runtime/service")
     parser.add_argument("--role", action="append", default=[], metavar="角色=提供方[:模型]",
                         help="仅本次启动显式改某个专业节点的模型，如 reviewer=claude:claude-fable-5-1；可重复")
     args = parser.parse_args()
+    runtime = Path(os.getenv("WRITING_RUNTIME_DIR") or Path(__file__).parent / ".runtime")
+    directory = args.directory or runtime / ("tui-mock" if args.mock else "tui")
     if args.mock:
+        # 模拟模型会在任务检查点上继续写占位稿；打开真实任务目录会把真实文章覆盖掉，所以只用独立目录。
+        registry = directory / "tasks.json"
+        if args.directory and registry.is_file() and registry.read_text(encoding="utf-8").strip() not in {"", "{}"}:
+            raise SystemExit("模拟模式不能打开已有真实任务的目录；去掉 --directory 即使用独立的 .runtime/tui-mock")
         os.environ.update(MOCK_LLM="1", MEMORY_ENABLED="0")
     apply_role_overrides(args.role)
-    WritingApp(args.directory, choose_connection=True).run()
+    WritingApp(directory, choose_connection=True, mock=args.mock).run()
 
 
 if __name__ == "__main__":

@@ -126,3 +126,18 @@ def append_version(topic_id: str, title: str, article: str, *, source: dict) -> 
         return version_dir
     finally:
         lock.__exit__(None, None, None)
+
+
+def version_of(article_path) -> dict:
+    """成稿路径属于哪条版本线的第几版；不在任何版本线里（或正文已被改动）返回空字典。"""
+    path = Path(article_path).resolve()
+    version_dir = path.parent
+    if path.name != "article.md" or not re.fullmatch(r"v\d+", version_dir.name):
+        return {}
+    log = read_log(version_dir.parent)
+    number = int(version_dir.name[1:])
+    entry = next((v for v in log.get("versions", []) if v.get("version") == number), None)
+    if not entry or hashlib.sha256(path.read_bytes()).hexdigest() != entry.get("sha256"):
+        return {}
+    return {"topic_id": log.get("topic_id", ""), "title": entry.get("title") or log.get("title", ""),
+            "version": number, "sha256": entry["sha256"], "path": str(path), "status": entry.get("status", "")}

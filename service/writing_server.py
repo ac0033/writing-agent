@@ -106,9 +106,11 @@ class TaskManager:
 
     # ---- 工具实现 ----
 
-    def start(self, topic: str, idea: str = "", auto_approve: bool = True, topic_id: str = "", *, topic_file: str = "", topic_sha256: str = "", pipeline_version: str = "v1", sample_requested: bool = False) -> str:
+    def start(self, topic: str, idea: str = "", auto_approve: bool = True, topic_id: str = "", *, topic_file: str = "", topic_sha256: str = "", pipeline_version: str = "v1", sample_requested: bool = False, revision_base: dict | None = None) -> str:
         if pipeline_version not in {"v1", "v2"}:
             raise ValueError("未知流程版本")
+        if revision_base is not None and pipeline_version != "v2":
+            raise ValueError("修订已有版本只支持 v2 流程")
         from tools.identity import topic_id as resolve_topic_id
         identity = resolve_topic_id(topic, topic_id)
         task_id = uuid.uuid4().hex[:8]
@@ -116,6 +118,8 @@ class TaskManager:
             "task_id": task_id,
             "pipeline_version": pipeline_version,
             "sample_requested": bool(sample_requested),
+            # 修订任务：以版本线里某一版为起点定向修改（路径、版本号、正文哈希、修改要求），保存后接到线尾。
+            "revision_base": dict(revision_base) if revision_base else None,
             "thread_id": f"svc-{task_id}",  # 与 CLI 会话的 thread_id 区分，互不串场
             "topic": topic,
             "topic_id": identity,
